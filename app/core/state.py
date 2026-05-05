@@ -17,6 +17,7 @@ TaskStatus = Literal[
     "env_built",
     "smoke_ran",
     "report_written",
+    "cancelled",
     "failed",
 ]
 
