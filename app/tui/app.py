@@ -126,6 +126,7 @@ class PaperAgentApp(App):
         self._status_bar: StatusBar | None = None
         self._composer: Composer | None = None
         self._tool_cards: dict[str, ToolCard] = {}
+        self._active_tool_by_stage: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -182,21 +183,32 @@ class PaperAgentApp(App):
     # Tool card helpers
     # ------------------------------------------------------------------
 
-    def _get_or_create_tool_card(self, stage: str, message: str) -> ToolCard:
-        # Use a unique key per stage instance so repeated stages don't overwrite
+    def _create_tool_card(self, stage: str, message: str) -> ToolCard:
         key = f"{stage}:{len(self._tool_cards)}"
-        if stage in self._tool_cards:
-            return self._tool_cards[stage]
         card = ToolCard(name=stage, status="running", message=message)
         if self._timeline:
             self._timeline.mount(card)
             self._timeline.scroll_end(animate=False)
-        self._tool_cards[stage] = card
+        self._tool_cards[key] = card
+        self._active_tool_by_stage[stage] = key
         return card
 
+    def _get_active_tool_card(self, stage: str) -> ToolCard | None:
+        key = self._active_tool_by_stage.get(stage)
+        if key is None:
+            return None
+        return self._tool_cards.get(key)
+
+    def _get_or_create_tool_card(self, stage: str, message: str) -> ToolCard:
+        existing = self._get_active_tool_card(stage)
+        if existing is not None:
+            return existing
+        return self._create_tool_card(stage, message)
+
     def _update_tool_card(self, stage: str, status: str, detail: str | None = None, duration: float | None = None) -> None:
-        if stage in self._tool_cards:
-            self._tool_cards[stage].update(status=status, detail=detail, duration=duration)
+        card = self._get_active_tool_card(stage)
+        if card is not None:
+            card.update(status=status, detail=detail, duration=duration)
 
     # ------------------------------------------------------------------
     # Composer input handler
@@ -218,6 +230,11 @@ class PaperAgentApp(App):
             self._confirm_shell(line)
             return
 
+        command, args = parse_command(line)
+        if command == "":
+            return
+
+        # While agent is running, only allow a safe subset of commands
         if self.agent_running:
             allowed = {"status", "logs", "cancel", "help", "quit", "exit"}
             if command in allowed:
@@ -236,9 +253,6 @@ class PaperAgentApp(App):
             self._add_assistant("Agent 正在运行。可用命令：/status, /logs, /cancel, /quit")
             return
 
-        command, args = parse_command(line)
-        if command == "":
-            return
         if command == "!":
             self._run_shell(args)
             return
@@ -533,6 +547,7 @@ class PaperAgentApp(App):
                         repo_dir=s.repo_dir,
                         timeout_minutes=s.timeout_minutes,
                         max_repair_attempts=s.max_repair_attempts,
+                        should_cancel=lambda: s.cancel_requested,
                     )
 
             state = await loop.run_in_executor(None, run_with_progress)
@@ -553,6 +568,9 @@ class PaperAgentApp(App):
             self._add_error(f"流水线异常退出：{e}")
         finally:
             self.agent_running = False
+            if s.cancel_requested:
+                self._add_assistant("任务已取消。")
+                s.cancel_requested = False
             self._update_status()
             self.store.save_snapshot(s)
             if self._composer:

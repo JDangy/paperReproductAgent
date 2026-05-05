@@ -1,7 +1,7 @@
 import json
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -46,6 +46,7 @@ def _run_pipeline(
     repo_dir: Optional[str] = None,
     timeout_minutes: int = 30,
     max_repair_attempts: int = settings.default_max_repair_attempts,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> TaskState:
     """Run the full pipeline and return the final TaskState."""
     sanitize_proxy_env()
@@ -133,17 +134,22 @@ def _run_pipeline(
 
     try:
         for desc, agent in agents:
+            if should_cancel and should_cancel():
+                state.status = "cancelled"
+                emit_progress("Pipeline", "cancelled", level="warning", phase="fail")
+                save_state(state)
+                break
             t0 = time.time()
             t0_iso = _now_iso()
             step_ok = True
-            emit_progress(desc, "started")
+            emit_progress(desc, "started", phase="start")
             try:
                 state = agent.run(state)
             except Exception as e:
                 state.errors.append({"step": desc, "error": str(e)})
                 state.status = "failed"
                 step_ok = False
-                emit_progress(desc, "failed", level="error", detail=str(e))
+                emit_progress(desc, "failed", level="error", phase="fail", detail=str(e))
 
             elapsed_ms = int((time.time() - t0) * 1000)
             state.step_timings.append(StepTiming(
@@ -159,7 +165,7 @@ def _run_pipeline(
 
             save_state(state)
             if step_ok:
-                emit_progress(desc, "completed", level="success", detail=f"{elapsed_ms / 1000:.1f}s")
+                emit_progress(desc, "completed", level="success", phase="finish", detail=f"{elapsed_ms / 1000:.1f}s")
     finally:
         disable_telemetry()
 

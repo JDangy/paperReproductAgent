@@ -251,3 +251,82 @@ def test_session_store_list_sessions(tmp_path):
     assert len(sessions) == 2
     ids = {s["id"] for s in sessions}
     assert ids == {"sess-1", "sess-2"}
+
+
+# -----------------------------------------------------------------------
+# Tests for new TUI handle_line with agent_running
+# -----------------------------------------------------------------------
+
+from app.tui.app import PaperAgentApp
+
+
+def test_new_tui_allows_status_while_running_without_crash():
+    """handle_line must not crash with UnboundLocalError when agent_running=True."""
+    def runner(**kwargs):
+        raise AssertionError("should not run")
+
+    app = PaperAgentApp(
+        runner,
+        workspace="./workspace",
+        backend="venv",
+        timeout_minutes=30,
+        max_repair_attempts=5,
+    )
+    messages = []
+    app._add_assistant = lambda text: messages.append(text)
+    app.agent_running = True
+
+    app.handle_line("/status")
+
+    # Should not crash, and should produce a message (either status or "尚未运行")
+    assert len(messages) >= 1
+
+
+def test_new_tui_rejects_run_while_running():
+    """Non-allowed commands should be rejected when agent is running."""
+    def runner(**kwargs):
+        raise AssertionError("should not run")
+
+    app = PaperAgentApp(
+        runner,
+        workspace="./workspace",
+        backend="venv",
+        timeout_minutes=30,
+        max_repair_attempts=5,
+    )
+    messages = []
+    app._add_assistant = lambda text: messages.append(text)
+    app.agent_running = True
+
+    app.handle_line("/run")
+
+    assert any("可用命令" in m for m in messages)
+
+
+def test_progress_phase_field():
+    """ProgressEvent should carry the phase field correctly."""
+    from app.core.progress import ProgressEvent
+
+    event_start = ProgressEvent(stage="Build", message="started", phase="start")
+    assert event_start.phase == "start"
+
+    event_finish = ProgressEvent(
+        stage="Build",
+        message="completed",
+        level="success",
+        phase="finish",
+        detail="1.2s",
+    )
+    assert event_finish.phase == "finish"
+
+    event_fail = ProgressEvent(
+        stage="Build",
+        message="failed",
+        level="error",
+        phase="fail",
+    )
+    assert event_fail.phase == "fail"
+
+    # Default phase should be "progress"
+    event_default = ProgressEvent(stage="Build", message="doing stuff")
+    assert event_default.phase == "progress"
