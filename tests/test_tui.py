@@ -1,6 +1,6 @@
 from app.core.state import ReportResult, TaskState
 from app.agents.input_resolver_agent import PaperInputResolution
-from app.tui import PaperSmokeTUI, parse_command
+from app.tui_old import PaperSmokeTUI, parse_command
 
 
 def test_parse_slash_command():
