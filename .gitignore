@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+workspace/
+*.egg-info/
+dist/
+build/
+.ruff_cache/
+.pytest_cache/
+eval_*/
+goldset_results/
+tui_quick_test/
+*.pdf
