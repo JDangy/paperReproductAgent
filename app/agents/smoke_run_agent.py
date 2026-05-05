@@ -202,7 +202,7 @@ class SmokeRunAgent:
                         result.summary = f"Smoke command executed successfully after {len(result.repair_actions)} environment repair(s) (backend={backend})"
                     else:
                         result.summary = f"Smoke command executed successfully (backend={backend})"
-                    emit_progress("Run smoke command", f"attempt {attempt_no} passed", level="success", phase="finish")
+                    emit_progress("Run smoke command", f"attempt {attempt_no} passed", level="success")
                     break
 
                 if not self._can_repair_missing_dependency(backend, failure_type, attempt_no):
@@ -232,17 +232,17 @@ class SmokeRunAgent:
                 result.repair_actions.append(repair_action)
                 if not repair_action["success"]:
                     result.summary = f"Smoke command failed and dependency repair failed for {package} (backend={backend})"
-                    emit_progress("Run smoke command", "repair failed", level="error", phase="fail", detail=package)
+                    emit_progress("Run smoke command", "repair failed", level="error", detail=package)
                     break
 
         except subprocess.TimeoutExpired:
             result.timed_out = True
             result.summary = "Smoke command timed out"
             result.failure_type = "timeout"
-            emit_progress("Run smoke command", "timed out", level="error", phase="fail")
+            emit_progress("Run smoke command", "timed out", level="error")
         except Exception as e:
             result.summary = f"Smoke execution error: {e}"
-            emit_progress("Run smoke command", "execution error", level="error", phase="fail", detail=str(e))
+            emit_progress("Run smoke command", "execution error", level="error", detail=str(e))
 
         state.smoke_run = result
         save_json(run_dir / "run_summary.json", result)

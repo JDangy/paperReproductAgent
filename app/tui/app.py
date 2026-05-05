@@ -209,6 +209,9 @@ class PaperAgentApp(App):
         card = self._get_active_tool_card(stage)
         if card is not None:
             card.update(status=status, detail=detail, duration=duration)
+        # Release active mapping so next start for this stage creates a new card
+        if status in {"success", "failed"}:
+            self._active_tool_by_stage.pop(stage, None)
 
     # ------------------------------------------------------------------
     # Composer input handler
@@ -458,6 +461,19 @@ class PaperAgentApp(App):
         self.session.report_path = snapshot.get("report_path")
         self.session.input_resolved = snapshot.get("input_resolved", False)
         self.store = store
+
+        # Replay timeline events from JSONL
+        if self._timeline:
+            self._timeline.clear_messages()
+            for event in store.load_events():
+                text = event.payload.get("text", "")
+                if event.type == "user_message":
+                    self._timeline.add_user(text)
+                elif event.type == "assistant_message":
+                    self._timeline.add_assistant(text)
+                elif event.type == "error":
+                    self._timeline.add_error(text)
+
         self._add_assistant(f"已恢复会话 session-{session_id}")
         self._update_status()
 

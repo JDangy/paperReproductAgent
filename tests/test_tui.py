@@ -330,3 +330,63 @@ def test_progress_phase_field():
     # Default phase should be "progress"
     event_default = ProgressEvent(stage="Build", message="doing stuff")
     assert event_default.phase == "progress"
+
+
+def test_toolcard_state_transitions():
+    """Verify active_tool_by_stage is released after finish/fail so next start creates a new card."""
+    from app.tui.app import PaperAgentApp
+
+    def runner(**kwargs):
+        raise AssertionError("should not run")
+
+    app = PaperAgentApp(
+        runner,
+        workspace="./workspace",
+        backend="venv",
+        timeout_minutes=30,
+        max_repair_attempts=5,
+    )
+
+    # Phase 1: start creates card
+    card1 = app._create_tool_card("Build virtualenv", "started")
+    assert card1.status == "running"
+    assert app._get_active_tool_card("Build virtualenv") is card1
+
+    # Phase 2: finish marks success and releases active mapping
+    app._update_tool_card("Build virtualenv", status="success", detail="3.2s")
+    assert card1.status == "success"
+    assert app._get_active_tool_card("Build virtualenv") is None
+
+    # Phase 3: next start for same stage creates a NEW card
+    card2 = app._create_tool_card("Build virtualenv", "started again")
+    assert card2 is not card1
+    assert card2.status == "running"
+    assert app._get_active_tool_card("Build virtualenv") is card2
+
+    # Phase 4: fail also releases
+    app._update_tool_card("Build virtualenv", status="failed", detail="error")
+    assert app._active_tool_by_stage is not None  # attr exists
+    assert app._get_active_tool_card("Build virtualenv") is None
+
+
+def test_cancel_stops_pipeline(tmp_path):
+    """should_cancel callback should cause pipeline to return early."""
+    from app.core.state import TaskState
+    from app.cli import _run_pipeline
+
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    cancel_flag = {"requested": True}
+
+    def always_cancel():
+        return cancel_flag["requested"]
+
+    # Run with backend=none (no docker/venv), should_cancel immediately True
+    state = _run_pipeline(
+        input_value=str(pdf),
+        workspace=str(tmp_path / "workspace"),
+        backend="none",
+        should_cancel=always_cancel,
+    )
+    assert state.status == "cancelled"

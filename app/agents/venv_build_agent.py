@@ -205,13 +205,13 @@ class VenvBuildAgent:
                 _ensure_target_namespace_packages(Path(result.python_paths[0]))
 
             result.build_success = True
-            emit_progress("Build virtualenv", "environment ready", level="success", phase="finish")
+            emit_progress("Build virtualenv", "environment ready", level="success")
 
         except subprocess.TimeoutExpired:
             result.build_success = False
             result.failure_type = "timeout"
             result.failure_summary = "Virtualenv build timed out"
-            emit_progress("Build virtualenv", "timed out", level="error", phase="fail")
+            emit_progress("Build virtualenv", "timed out", level="error")
         except BuildStepError as e:
             result.build_success = False
             result.failure_type = classify_build_failure("\n".join(log_parts))
@@ -220,14 +220,13 @@ class VenvBuildAgent:
                 "Build virtualenv",
                 "build step failed",
                 level="error",
-                phase="fail",
                 detail=f"{e.step_name} exit {e.returncode}",
             )
         except Exception as e:
             result.build_success = False
             result.failure_type = "unknown"
             result.failure_summary = str(e)
-            emit_progress("Build virtualenv", "build error", level="error", phase="fail", detail=str(e))
+            emit_progress("Build virtualenv", "build error", level="error", detail=str(e))
 
         build_log_path.write_text("\n".join(log_parts), encoding="utf-8")
         state.env_build = result
