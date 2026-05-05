@@ -390,3 +390,34 @@ def test_cancel_stops_pipeline(tmp_path):
         should_cancel=always_cancel,
     )
     assert state.status == "cancelled"
+
+
+def test_step_succeeded_checks_business_state():
+    """_step_succeeded should check TaskState fields, not just exceptions."""
+    from app.cli import _step_succeeded
+    from app.core.state import TaskState
+
+    state = TaskState(task_id="t1", input_value="x", workspace_dir=".", task_dir="/tmp", backend="none")
+
+    # With no data at all, env build step should fail
+    assert _step_succeeded("Build virtualenv", state) is False
+    assert _step_succeeded("Run smoke command", state) is False
+    assert _step_succeeded("Write report", state) is False
+
+    # With a fresh state (no failures), generic steps should pass
+    assert _step_succeeded("Ingest paper", state) is False
+    assert _step_succeeded("Evaluate repo", state) is False
+
+    # With paper_metadata set, ingest should pass
+    from app.core.state import PaperMetadata
+    state.paper_metadata = PaperMetadata(title="Test", abstract="abstract")
+    assert _step_succeeded("Ingest paper", state) is True
+
+    # With env_build.build_success = True, build step should pass
+    from app.core.state import EnvironmentBuildResult
+    state.env_build = EnvironmentBuildResult(build_success=True)
+    assert _step_succeeded("Build virtualenv", state) is True
+
+    # With build_success = False, should fail
+    state.env_build = EnvironmentBuildResult(build_success=False)
+    assert _step_succeeded("Build virtualenv", state) is False

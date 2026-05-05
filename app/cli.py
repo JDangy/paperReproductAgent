@@ -145,6 +145,7 @@ def _run_pipeline(
             emit_progress(desc, "started", phase="start")
             try:
                 state = agent.run(state)
+                step_ok = _step_succeeded(desc, state)
             except Exception as e:
                 state.errors.append({"step": desc, "error": str(e)})
                 state.status = "failed"
@@ -166,6 +167,12 @@ def _run_pipeline(
             save_state(state)
             if step_ok:
                 emit_progress(desc, "completed", level="success", phase="finish", detail=f"{elapsed_ms / 1000:.1f}s")
+            else:
+                if not state.errors or all(e["step"] != desc for e in state.errors):
+                    state.errors.append({"step": desc, "error": "Step completed with errors"})
+                    state.status = "failed"
+                    save_state(state)
+                emit_progress(desc, "failed", level="error", phase="fail", detail=f"business check failed ({elapsed_ms / 1000:.1f}s)")
     finally:
         disable_telemetry()
 
@@ -174,6 +181,25 @@ def _run_pipeline(
     save_state(state)
 
     return state
+
+
+def _step_succeeded(desc: str, state: TaskState) -> bool:
+    """Check business-level success for a pipeline step based on TaskState."""
+    if desc in {"Build virtualenv", "Build Docker image"}:
+        return bool(state.env_build and state.env_build.build_success)
+    if desc == "Run smoke command":
+        return bool(state.smoke_run and state.smoke_run.success)
+    if desc == "Write report":
+        return state.report is not None
+    if desc == "Ingest paper":
+        return state.paper_metadata is not None
+    if desc == "Understand paper":
+        return state.reproduction_brief is not None
+    if desc == "Search GitHub":
+        return bool(state.repo_candidates)
+    if desc == "Evaluate repo":
+        return state.repo_evaluation is not None
+    return state.status not in {"failed", "cancelled"}
 
 
 def _create_fresh_task_paths(workspace: str) -> Tuple[str, TaskPaths]:
