@@ -3,7 +3,6 @@ from __future__ import annotations
 """Tool call card widget - collapsible display for pipeline stages."""
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static, Collapsible
@@ -70,6 +69,15 @@ class ToolCard(Widget):
             self._duration = duration
         self._refresh_display()
 
+    def _format_duration(self) -> str:
+        if self._duration is None:
+            return ""
+        if self._duration >= 60:
+            mins = int(self._duration // 60)
+            secs = self._duration % 60
+            return f"  {mins}m{secs:.0f}s"
+        return f"  {self._duration:.1f}s"
+
     def _refresh_display(self) -> None:
         icon = {"running": "▸", "success": "✓", "failed": "✗"}.get(self._status, "▸")
         color = {
@@ -78,33 +86,33 @@ class ToolCard(Widget):
             "failed": T.ERROR_BORDER,
         }.get(self._status, T.TOOL_BORDER)
 
-        duration_str = ""
-        if self._duration is not None:
-            if self._duration >= 60:
-                mins = int(self._duration // 60)
-                secs = self._duration % 60
-                duration_str = f"  {mins}m{secs:.0f}s"
-            else:
-                duration_str = f"  {self._duration:.1f}s"
+        status_label = {"running": "running", "success": "success", "failed": "failed"}.get(self._status, self._status)
+        duration_str = self._format_duration()
 
-        header_text = f"[bold {color}]{icon}[/] [{color}]{self.tool_name}[/][dim]{duration_str}[/dim]"
+        header_text = (
+            f"[bold {color}]{icon}[/] [{color}]{self.tool_name}[/] "
+            f"[dim]{status_label}{duration_str}[/]"
+        )
         try:
-            header = self.query_one(".tool-header", Static)
-            header.update(header_text)
+            self.query_one(".tool-header", Static).update(header_text)
+        except Exception:
+            pass
+
+        body_text = self._detail or self._message or ""
+        try:
+            body = self.query_one(".tool-body", Static)
+            if body_text:
+                body.update(body_text)
+                body.display = True
+            else:
+                body.display = False
         except Exception:
             pass
 
     def compose(self) -> ComposeResult:
-        icon = "▸"
-        color = T.TOOL_BORDER
-        duration_str = ""
-
-        header_text = f"[bold {color}]{icon}[/] [{color}]{self.tool_name}[/][dim]{duration_str}[/dim]"
-
         with Collapsible(title="", classes="tool-collapsible"):
-            yield Static(header_text, classes="tool-header")
-            if self._detail:
-                yield Static(self._detail, classes="tool-body")
+            yield Static("", classes="tool-header")
+            yield Static("", classes="tool-body", display=False)
 
     def on_mount(self) -> None:
         self._refresh_display()

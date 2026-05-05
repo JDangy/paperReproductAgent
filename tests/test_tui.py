@@ -3,6 +3,52 @@ from app.agents.input_resolver_agent import PaperInputResolution
 from app.tui_old import PaperSmokeTUI, parse_command
 
 
+# -----------------------------------------------------------------------
+# Tests for new Textual TUI parse_command
+# -----------------------------------------------------------------------
+
+from app.tui.app import parse_command as new_parse_command
+
+
+def test_new_tui_parse_slash_command():
+    assert new_parse_command("/input @paper.pdf") == ("input", "@paper.pdf")
+
+
+def test_new_tui_parse_shell_command():
+    assert new_parse_command("!ls -la") == ("!", "ls -la")
+
+
+def test_new_tui_parse_plain_message():
+    assert new_parse_command("summarize this paper") == ("message", "summarize this paper")
+
+
+def test_new_tui_parse_absolute_path_as_message():
+    assert new_parse_command("/tmp/paper.pdf") == ("message", "/tmp/paper.pdf")
+
+
+def test_new_tui_parse_empty():
+    assert new_parse_command("") == ("", "")
+    assert new_parse_command("   ") == ("", "")
+
+
+def test_new_tui_parse_unknown_slash():
+    assert new_parse_command("/unknown blah") == ("message", "/unknown blah")
+
+
+def test_new_tui_parse_known_commands():
+    assert new_parse_command("/help") == ("help", "")
+    assert new_parse_command("/clear") == ("clear", "")
+    assert new_parse_command("/status") == ("status", "")
+    assert new_parse_command("/cancel") == ("cancel", "")
+    assert new_parse_command("/sessions") == ("sessions", "")
+    assert new_parse_command("/resume abc123") == ("resume", "abc123")
+
+
+# -----------------------------------------------------------------------
+# Tests for old TUI (backward compatibility)
+# -----------------------------------------------------------------------
+
+
 def test_parse_slash_command():
     assert parse_command("/input @paper.pdf") == ("input", "@paper.pdf")
 
@@ -156,3 +202,52 @@ def test_plain_paper_input_failure_does_not_call_runner(tmp_path):
     timeline = "\n".join(tui.active.timeline)
     assert "不能开始复现" in timeline
     assert "本地 PDF 不存在" in timeline
+
+
+# -----------------------------------------------------------------------
+# Tests for SessionStore snapshot
+# -----------------------------------------------------------------------
+
+from app.runtime.session import Session, SessionStore
+from app.runtime.events import AgentEvent
+
+
+def test_session_store_append_and_load(tmp_path):
+    store = SessionStore("test-session", base_dir=tmp_path)
+    store.append(AgentEvent(type="user_message", payload={"text": "hello"}))
+    store.append(AgentEvent(type="assistant_message", payload={"text": "hi"}))
+
+    events = store.load_events()
+    assert len(events) == 2
+    assert events[0].type == "user_message"
+    assert events[1].payload["text"] == "hi"
+
+
+def test_session_store_snapshot_roundtrip(tmp_path):
+    store = SessionStore("snap-test", base_dir=tmp_path)
+    session = Session(
+        id="snap-test",
+        paper_path="/path/to/paper.pdf",
+        backend="venv",
+        status="success",
+    )
+    store.save_snapshot(session)
+
+    loaded = store.load_snapshot()
+    assert loaded is not None
+    assert loaded["id"] == "snap-test"
+    assert loaded["paper_path"] == "/path/to/paper.pdf"
+    assert loaded["backend"] == "venv"
+    assert loaded["status"] == "success"
+
+
+def test_session_store_list_sessions(tmp_path):
+    store1 = SessionStore("sess-1", base_dir=tmp_path)
+    store1.save_snapshot(Session(id="sess-1", status="success", paper_path="a.pdf"))
+    store2 = SessionStore("sess-2", base_dir=tmp_path)
+    store2.save_snapshot(Session(id="sess-2", status="failed", paper_path="b.pdf"))
+
+    sessions = SessionStore.list_sessions(base_dir=tmp_path)
+    assert len(sessions) == 2
+    ids = {s["id"] for s in sessions}
+    assert ids == {"sess-1", "sess-2"}

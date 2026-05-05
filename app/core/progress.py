@@ -11,6 +11,7 @@ class ProgressEvent:
     stage: str
     message: str
     level: str = "info"
+    phase: str = "progress"  # "start", "progress", "finish", "fail"
     detail: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -37,10 +38,11 @@ def emit_progress(
     message: str,
     *,
     level: str = "info",
+    phase: str = "progress",
     detail: str | None = None,
     **data: Any,
 ) -> None:
     handler = _current_handler.get()
     if handler is None:
         return
-    handler(ProgressEvent(stage=stage, message=message, level=level, detail=detail, data=data))
+    handler(ProgressEvent(stage=stage, message=message, level=level, phase=phase, detail=detail, data=data))

@@ -6,7 +6,7 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Static, Markdown
 
 from .. import theme as T
 
@@ -56,7 +56,32 @@ class MessageBubble(Widget):
         color = color_map.get(self._kind, T.FG)
         label_str = f"[bold {color}]{self._label:<12}[/]" if self._label else ""
         content = f"{label_str} {self._text}" if label_str else self._text
-        yield Static(content)
+
+        # Use Markdown for assistant messages so reports render properly
+        if self._kind == "assistant" and _has_markdown(content):
+            # Prepend label as a styled paragraph if present
+            if label_str:
+                yield Static(label_str)
+                yield Markdown(self._text)
+            else:
+                yield Markdown(content)
+        else:
+            yield Static(content)
+
+
+def _has_markdown(text: str) -> bool:
+    """Heuristic: does this text likely contain Markdown syntax?"""
+    if any(line.startswith("#") for line in text.splitlines()):
+        return True
+    if "**" in text or "`" in text:
+        return True
+    if "```" in text:
+        return True
+    if "- " in text or "* " in text:
+        return True
+    if "|" in text and "---" in text:
+        return True
+    return False
 
 
 class MessageTimeline(VerticalScroll):

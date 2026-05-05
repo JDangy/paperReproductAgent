@@ -20,6 +20,7 @@ python-dotenv = "^1.0"
 GitPython = "^3.1"
 pyyaml = "^6.0"
 openai = "^1.30"
+textual = ">=0.80"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

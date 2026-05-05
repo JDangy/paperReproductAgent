@@ -59,10 +59,10 @@ class Composer(Widget):
     def set_disabled(self, disabled: bool) -> None:
         try:
             input_widget = self.query_one("#composer-input", Input)
-            input_widget.disabled = disabled
             if disabled:
-                input_widget.placeholder = "Agent 运行中，输入已禁用"
+                input_widget.placeholder = "Agent 运行中 · 可用 /status /logs /cancel"
             else:
                 input_widget.placeholder = self._placeholder
+                input_widget.focus()
         except Exception:
             pass

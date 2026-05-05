@@ -45,6 +45,9 @@ SLASH_COMMANDS = {
     "run",
     "report",
     "logs",
+    "cancel",
+    "sessions",
+    "resume",
     "quit",
     "exit",
 }
@@ -118,6 +121,7 @@ class PaperAgentApp(App):
         )
         self.store = SessionStore(self.session.id)
         self.agent_running = False
+        self._pending_shell: str | None = None
         self._timeline: MessageTimeline | None = None
         self._status_bar: StatusBar | None = None
         self._composer: Composer | None = None
@@ -179,6 +183,8 @@ class PaperAgentApp(App):
     # ------------------------------------------------------------------
 
     def _get_or_create_tool_card(self, stage: str, message: str) -> ToolCard:
+        # Use a unique key per stage instance so repeated stages don't overwrite
+        key = f"{stage}:{len(self._tool_cards)}"
         if stage in self._tool_cards:
             return self._tool_cards[stage]
         card = ToolCard(name=stage, status="running", message=message)
@@ -207,8 +213,27 @@ class PaperAgentApp(App):
     # ------------------------------------------------------------------
 
     def handle_line(self, line: str) -> None:
+        # Check for pending shell confirmation first
+        if self._pending_shell is not None:
+            self._confirm_shell(line)
+            return
+
         if self.agent_running:
-            self._add_assistant("Agent 正在运行，暂不接受新的输入。")
+            allowed = {"status", "logs", "cancel", "help", "quit", "exit"}
+            if command in allowed:
+                handlers = {
+                    "help": self._cmd_help,
+                    "status": self._cmd_status,
+                    "logs": self._cmd_logs,
+                    "cancel": self._cmd_cancel,
+                    "quit": self._cmd_quit,
+                    "exit": self._cmd_quit,
+                }
+                handler = handlers.get(command)
+                if handler:
+                    handler(args)
+                return
+            self._add_assistant("Agent 正在运行。可用命令：/status, /logs, /cancel, /quit")
             return
 
         command, args = parse_command(line)
@@ -237,6 +262,9 @@ class PaperAgentApp(App):
             "run": self._cmd_run,
             "report": self._cmd_report,
             "logs": self._cmd_logs,
+            "cancel": self._cmd_cancel,
+            "sessions": self._cmd_sessions,
+            "resume": self._cmd_resume,
             "quit": self._cmd_quit,
             "exit": self._cmd_quit,
         }
@@ -363,6 +391,62 @@ class PaperAgentApp(App):
     def _cmd_quit(self, _: str) -> None:
         self.exit()
 
+    def _cmd_cancel(self, _: str) -> None:
+        if not self.agent_running:
+            self._add_assistant("当前没有正在运行的任务。")
+            return
+        self.session.cancel_requested = True
+        self._add_assistant("已发送取消请求，等待当前步骤完成后停止。")
+
+    def _cmd_sessions(self, _: str) -> None:
+        from app.runtime.session import SessionStore
+        sessions = SessionStore.list_sessions()
+        if not sessions:
+            self._add_assistant("暂无历史会话记录。")
+            return
+        lines = ["历史会话："]
+        for i, snap in enumerate(sessions, 1):
+            sid = snap.get("id", "?")[:8]
+            paper = Path(snap.get("paper_path", "") or "-").name
+            status = snap.get("status", "-")
+            created = snap.get("created_at", 0)
+            import datetime
+            time_str = datetime.datetime.fromtimestamp(created).strftime("%Y-%m-%d %H:%M") if created else "-"
+            lines.append(f"  {i}. session-{sid}  {paper}  {status}  {time_str}")
+        self._add_assistant("\n".join(lines))
+
+    def _cmd_resume(self, args: str) -> None:
+        from app.runtime.session import SessionStore
+        session_id = args.strip()
+        if not session_id:
+            self._add_assistant("用法：/resume <session-id>")
+            return
+        # Accept both "session-xxxx" and bare "xxxx"
+        if session_id.startswith("session-"):
+            session_id = session_id[len("session-"):]
+        store = SessionStore(session_id)
+        snapshot = store.load_snapshot()
+        if snapshot is None:
+            self._add_assistant(f"未找到会话：{session_id}")
+            return
+        # Restore session fields
+        self.session.id = snapshot.get("id", self.session.id)
+        self.session.paper_path = snapshot.get("paper_path")
+        self.session.repo = snapshot.get("repo")
+        self.session.repo_dir = snapshot.get("repo_dir")
+        self.session.backend = snapshot.get("backend", "venv")
+        self.session.workspace = snapshot.get("workspace", "./workspace")
+        self.session.timeout_minutes = snapshot.get("timeout_minutes", 30)
+        self.session.max_repair_attempts = snapshot.get("max_repair_attempts", 5)
+        self.session.status = snapshot.get("status", "draft")
+        self.session.mode = snapshot.get("mode", "act")
+        self.session.task_dir = snapshot.get("task_dir")
+        self.session.report_path = snapshot.get("report_path")
+        self.session.input_resolved = snapshot.get("input_resolved", False)
+        self.store = store
+        self._add_assistant(f"已恢复会话 session-{session_id}")
+        self._update_status()
+
     # ------------------------------------------------------------------
     # Pipeline execution
     # ------------------------------------------------------------------
@@ -378,13 +462,28 @@ class PaperAgentApp(App):
         self._add_assistant("收到。我先确认这个本地 PDF 是否可读取。")
         self._start_pipeline()
 
+    def _show_plan_only(self) -> None:
+        self._add_assistant(
+            "当前是 PLAN 模式，不会执行任何命令。\n\n"
+            "计划：\n"
+            "1. 解析本地 PDF，提取标题、摘要、GitHub 链接。\n"
+            "2. 如果没有指定 repo，搜索候选 GitHub 仓库。\n"
+            "3. 评估仓库结构，推断安装方式和 smoke command。\n"
+            "4. 在 ACT 模式下构建环境并运行 smoke test。\n\n"
+            "输入 /act 切换到执行模式，再输入 /run 开始执行。"
+        )
+
     def _start_pipeline(self) -> None:
         s = self.session
+        if s.mode == "plan":
+            self._show_plan_only()
+            return
         if not s.paper_path:
             self._add_assistant("先把本地论文 PDF 路径发给我，例如 @/path/to/paper.pdf。")
             return
         self.agent_running = True
         self._update_status()
+        self.store.save_snapshot(s)
         if self._composer:
             self._composer.set_disabled(True)
 
@@ -393,20 +492,21 @@ class PaperAgentApp(App):
 
     async def _run_pipeline_async(self) -> None:
         s = self.session
+        loop = asyncio.get_running_loop()
         try:
             # Resolve input
             if not s.input_resolved:
-                self.call_from_thread(self._add_assistant, "正在解析输入并确认本地 PDF 文件。")
+                self._add_assistant("正在解析输入并确认本地 PDF 文件。")
                 try:
-                    resolution = await asyncio.get_event_loop().run_in_executor(
+                    resolution = await loop.run_in_executor(
                         None, self.resolver.resolve, s.paper_path or ""
                     )
                 except Exception as e:
                     s.status = "input_failed"
-                    self.call_from_thread(self._add_error, f"输入解析失败：{e}")
+                    self._add_error(f"输入解析失败：{e}")
                     return
 
-                self.call_from_thread(self._append_resolution, resolution)
+                self._append_resolution(resolution)
                 if not resolution.success or not resolution.input_value:
                     s.status = "input_failed"
                     return
@@ -414,12 +514,13 @@ class PaperAgentApp(App):
                 s.input_resolved = True
 
             s.status = "running"
-            self.call_from_thread(self._add_assistant, "开始复现流水线。")
-            self.call_from_thread(self._update_status)
+            self._add_assistant("开始复现流水线。")
+            self._update_status()
 
-            # Run the blocking pipeline in executor
+            # Run the blocking pipeline in executor (separate thread)
             def run_with_progress():
                 def on_progress(event: ProgressEvent) -> None:
+                    # Called from executor thread → must use call_from_thread
                     self.call_from_thread(
                         self._on_pipeline_progress, event
                     )
@@ -434,46 +535,44 @@ class PaperAgentApp(App):
                         max_repair_attempts=s.max_repair_attempts,
                     )
 
-            state = await asyncio.get_event_loop().run_in_executor(None, run_with_progress)
+            state = await loop.run_in_executor(None, run_with_progress)
 
             s.task_dir = state.task_dir
             s.status = state.report.final_status if state.report else state.status
             report_path = Path(state.task_dir) / "report" / "reproduction_smoke_report.md"
             s.report_path = str(report_path) if report_path.exists() else None
 
-            self.call_from_thread(self._add_assistant, f"已完成：{s.status}")
-            self.call_from_thread(self._update_status)
+            self._add_assistant(f"已完成：{s.status}")
+            self._update_status()
 
             if report_path.exists():
-                self.call_from_thread(self._append_report, report_path)
+                self._append_report(report_path)
 
         except Exception as e:
             s.status = "failed"
-            self.call_from_thread(self._add_error, f"流水线异常退出：{e}")
+            self._add_error(f"流水线异常退出：{e}")
         finally:
             self.agent_running = False
-            self.call_from_thread(self._update_status)
+            self._update_status()
+            self.store.save_snapshot(s)
             if self._composer:
-                self.call_from_thread(self._composer.set_disabled, False)
+                self._composer.set_disabled(False)
 
     def _on_pipeline_progress(self, event: ProgressEvent) -> None:
         """Called from pipeline thread via call_from_thread."""
         stage = event.stage
         message = event.message
         detail = event.detail
-        level = event.level
+        phase = event.phase
 
-        # Try to update existing tool card or create new one
-        if level == "info" and "started" in message:
+        if phase == "start":
             self._get_or_create_tool_card(stage, message)
-        elif level == "info" and "completed" in message:
-            pass  # duration will come separately
-        elif level == "success":
+        elif phase == "finish":
             self._update_tool_card(stage, status="success", detail=detail)
-        elif level == "error":
+        elif phase == "fail":
             self._update_tool_card(stage, status="failed", detail=detail)
         else:
-            # Generic progress update
+            # "progress" or unknown – update existing card
             card = self._get_or_create_tool_card(stage, message)
             card.update(detail=detail)
 
@@ -507,10 +606,32 @@ class PaperAgentApp(App):
         self._add_assistant(preview)
 
     def _run_shell(self, command: str) -> None:
-        import subprocess
         if not command:
             self._add_assistant("用法：!命令")
             return
+        # Two-step confirmation for shell commands
+        if self._pending_shell is None:
+            self._pending_shell = command
+            self._add_assistant(
+                f"确认执行 shell 命令？\n"
+                f"  $ {command}\n\n"
+                f"输入 [bold green]y[/] 确认，或输入其他内容取消。"
+            )
+            return
+        # This path shouldn't normally be reached, but handle it
+        self._execute_shell(command)
+
+    def _confirm_shell(self, response: str) -> None:
+        """Handle confirmation response for pending shell command."""
+        command = self._pending_shell
+        self._pending_shell = None
+        if response.strip().lower() in ("y", "yes", "是"):
+            self._execute_shell(command)
+        else:
+            self._add_assistant(f"已取消：$ {command}")
+
+    def _execute_shell(self, command: str) -> None:
+        import subprocess
         self._add_assistant(f"$ {command}")
         try:
             proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)

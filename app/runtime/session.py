@@ -31,6 +31,7 @@ class Session:
     report_path: str | None = None
     input_resolved: bool = False
     created_at: float = 0.0
+    cancel_requested: bool = False
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -47,6 +48,7 @@ class SessionStore:
         self._dir = base_dir or SESSIONS_DIR
         self._dir.mkdir(parents=True, exist_ok=True)
         self._path = self._dir / f"{session_id}.jsonl"
+        self._state_path = self._dir / f"{session_id}.state.json"
 
     def append(self, event: AgentEvent) -> None:
         record = {
@@ -75,6 +77,37 @@ class SessionStore:
                     )
                 )
         return events
+
+    def save_snapshot(self, session: Session) -> None:
+        """Save a full snapshot of session state."""
+        import dataclasses
+        snapshot = dataclasses.asdict(session)
+        with open(self._state_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False, indent=2)
+
+    def load_snapshot(self) -> dict[str, Any] | None:
+        """Load session state snapshot."""
+        if not self._state_path.exists():
+            return None
+        with open(self._state_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    @classmethod
+    def list_sessions(cls, base_dir: Path | None = None) -> list[dict[str, Any]]:
+        """List all saved sessions with their snapshots."""
+        sessions_dir = base_dir or SESSIONS_DIR
+        if not sessions_dir.exists():
+            return []
+        results: list[dict[str, Any]] = []
+        for state_file in sorted(sessions_dir.glob("*.state.json")):
+            try:
+                with open(state_file, "r", encoding="utf-8") as f:
+                    snapshot = json.load(f)
+                results.append(snapshot)
+            except Exception:
+                # Corrupt file, skip
+                pass
+        return results
 
 
 def make_progress_bridge(
