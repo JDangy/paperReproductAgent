@@ -5,8 +5,10 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.benchmark.schema import BenchmarkRunResult, BenchmarkSpec
 
-BackendType = Literal["none", "local", "venv", "docker"]
+
+BackendType = Literal["none", "local", "venv", "conda", "docker"]
 InputType = Literal["arxiv", "pdf", "unknown"]
 TaskStatus = Literal[
     "created",
@@ -16,16 +18,25 @@ TaskStatus = Literal[
     "repo_evaluated",
     "env_built",
     "smoke_ran",
+    "benchmark_planned",
+    "benchmark_ran",
+    "reproduction_ran",
     "report_written",
     "cancelled",
     "failed",
 ]
 
 FinalStatus = Literal[
+    "benchmark_success",
+    "reproduction_success",
     "success",
     "partial_success_help_only",
     "repo_found_but_env_failed",
     "repo_found_but_smoke_failed",
+    "repo_found_but_reproduction_failed",
+    "repo_found_but_benchmark_failed",
+    "repo_found_reproduction_not_run",
+    "repo_found_benchmark_not_run",
     "repo_found_smoke_not_run",
     "repo_not_found",
     "paper_parse_failed",
@@ -58,6 +69,7 @@ class ReproductionBrief(BaseModel):
     method_keywords: list[str] = Field(default_factory=list)
     github_links_in_paper: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+    benchmark_protocol: dict[str, Any] = Field(default_factory=dict)
 
 
 class RepoCandidate(BaseModel):
@@ -86,6 +98,7 @@ class RepoEvaluation(BaseModel):
 
     runnable_score: float = 0.0
     risk_flags: list[str] = Field(default_factory=list)
+    benchmark_surface: dict[str, Any] = Field(default_factory=dict)
 
 
 class EnvironmentBuildResult(BaseModel):
@@ -122,6 +135,33 @@ class SmokeRunResult(BaseModel):
     repair_actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ReproductionCommand(BaseModel):
+    argv: list[str]
+    display: str
+    kind: Literal["demo", "example", "evaluation", "pytest"] = "demo"
+    reason: Optional[str] = None
+
+
+class ReproductionRunResult(BaseModel):
+    command: Optional[ReproductionCommand] = None
+    eligible: bool = False
+    skipped: bool = False
+    skip_reason: Optional[str] = None
+    success: bool = False
+    exit_code: Optional[int] = None
+    timed_out: bool = False
+    stdout_path: Optional[str] = None
+    stderr_path: Optional[str] = None
+    summary: Optional[str] = None
+    failure_type: Optional[str] = None
+    failure_evidence: Optional[str] = None
+    output_artifacts: list[str] = Field(default_factory=list)
+    command_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    reference_results: dict[str, Any] = Field(default_factory=dict)
+    comparisons: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ReportResult(BaseModel):
     final_status: FinalStatus
     report_markdown_path: str
@@ -150,7 +190,7 @@ class TaskState(BaseModel):
     workspace_dir: str
     task_dir: str
     created_at: datetime = Field(default_factory=datetime.now)
-    backend: BackendType = "docker"
+    backend: BackendType = "conda"
 
     paper_input: Optional[PaperInput] = None
     paper_metadata: Optional[PaperMetadata] = None
@@ -162,6 +202,9 @@ class TaskState(BaseModel):
 
     env_build: Optional[EnvironmentBuildResult] = None
     smoke_run: Optional[SmokeRunResult] = None
+    benchmark_plan: list[BenchmarkSpec] = Field(default_factory=list)
+    benchmark_run: Optional[BenchmarkRunResult] = None
+    reproduction_run: Optional[ReproductionRunResult] = None
     report: Optional[ReportResult] = None
 
     step_timings: list[StepTiming] = Field(default_factory=list)

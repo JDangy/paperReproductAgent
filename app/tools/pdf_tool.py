@@ -69,9 +69,32 @@ def extract_abstract_heuristic(text: str) -> str | None:
 
 
 def extract_github_links(text: str) -> list[str]:
-    links = re.findall(r"https?://github\.com/[^\s\)\]\}\>,;]+", text)
+    normalized = normalize_wrapped_urls(text)
+    links = re.findall(r"https?://github\.com/[^\s\)\]\}\>,;]+", normalized)
     cleaned = [link.rstrip(".,;:") for link in links]
     return sorted(set(cleaned))
+
+
+def extract_reproduction_links(text: str) -> list[str]:
+    normalized = normalize_wrapped_urls(text)
+    candidates: list[str] = []
+    url_re = re.compile(r"(?:https?://)?(?:www\.)?[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[^\s\)\]\}\>,;]+")
+    for match in url_re.finditer(normalized):
+        url = match.group(0).rstrip(".,;:")
+        context = normalized[max(0, match.start() - 100): match.end() + 100].lower()
+        if "github.com" in url.lower() or any(
+            term in context
+            for term in ("code", "github", "implementation", "project", "weights", "available at")
+        ):
+            candidates.append(url)
+    return sorted(set(candidates))
+
+
+def normalize_wrapped_urls(text: str) -> str:
+    text = re.sub(r"(?<=\w)\.\s+(?=\w)", ".", text)
+    text = re.sub(r"(?<=/)\s+(?=\w)", "", text)
+    text = re.sub(r"(?<=\w)\s+(?=/)", "", text)
+    return text
 
 
 def extract_basic_metadata(text: str) -> dict:

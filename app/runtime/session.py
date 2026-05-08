@@ -21,7 +21,7 @@ class Session:
     paper_path: str | None = None
     repo: str | None = None
     repo_dir: str | None = None
-    backend: str = "venv"
+    backend: str = "conda"
     workspace: str = "./workspace"
     timeout_minutes: int = 30
     max_repair_attempts: int = 5
@@ -117,11 +117,14 @@ def make_progress_bridge(
     """Create a progress handler that bridges ProgressEvent -> AgentEvent."""
 
     def on_progress(event: ProgressEvent) -> None:
-        level = event.level
-        if level in ("success", "warning", "error"):
-            etype: EventType = "tool_finished" if level == "success" else "error"
+        if event.phase == "start":
+            etype: EventType = "tool_started"
+        elif event.phase == "finish":
+            etype = "tool_finished"
+        elif event.phase == "fail" or event.level == "error":
+            etype = "tool_failed"
         else:
-            etype = "tool_started"
+            etype = "tool_progress"
 
         agent_event = AgentEvent(
             type=etype,
@@ -129,7 +132,9 @@ def make_progress_bridge(
                 "stage": event.stage,
                 "message": event.message,
                 "level": event.level,
+                "phase": event.phase,
                 "detail": event.detail,
+                "data": event.data,
             },
         )
         emit(agent_event)

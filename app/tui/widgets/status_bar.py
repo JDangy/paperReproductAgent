@@ -26,7 +26,7 @@ class StatusBar(Widget):
         super().__init__(**kwargs)
         self._mode = "ACT"
         self._session = "session-1"
-        self._backend = "venv"
+        self._backend = "conda"
         self._status = "draft"
         self._paper = "-"
 

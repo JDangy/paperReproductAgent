@@ -12,6 +12,7 @@ build/
 .pytest_cache/
 eval_*/
 goldset_results/
+goldset_results_*/
 tui_quick_test/
 *.pdf
 .paper-agent/

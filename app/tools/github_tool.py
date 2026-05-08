@@ -20,6 +20,7 @@ def parse_github_url(url: str) -> tuple[str, str] | None:
 
     owner, repo = match.groups()
     repo = repo.rstrip(".,;:)#?]}")
+    repo = re.sub(r"\.\d+(?:\.[A-Za-z][\w-]*)*$", "", repo)
     if repo.endswith(".git"):
         repo = repo[:-4]
     if owner.lower() in {"features", "topics", "about", "marketplace", "collections"}:
@@ -70,13 +71,26 @@ def get_github_repo_urls_from_page(url: str, max_results: int = 5) -> list[str]:
     if parsed:
         return [canonical_github_repo_url(*parsed)]
 
+    page_url = normalize_project_page_url(url)
     try:
-        response = httpx.get(url, follow_redirects=True, timeout=30)
+        response = httpx.get(page_url, follow_redirects=True, timeout=30)
         response.raise_for_status()
     except Exception:
         return []
 
     return extract_github_repo_urls_from_html(response.text, max_results=max_results)
+
+
+def normalize_project_page_url(url: str) -> str:
+    url = url.strip().strip("<>()[]{}.,;")
+    url = re.sub(r"(?<=\w)\.\s+(?=\w)", ".", url)
+    url = re.sub(r"(?<=/)\s+(?=\w)", "", url)
+    url = re.sub(r"(?<=\w)\s+(?=/)", "", url)
+    if re.match(r"^[a-z][a-z0-9+\-.]*://", url, flags=re.IGNORECASE):
+        return url
+    if url.startswith("//"):
+        return "https:" + url
+    return "https://" + url
 
 
 def github_headers() -> dict:

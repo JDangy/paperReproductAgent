@@ -8,6 +8,7 @@ EventType = Literal[
     "user_message",
     "assistant_message",
     "tool_started",
+    "tool_progress",
     "tool_finished",
     "tool_failed",
     "status_changed",

@@ -125,7 +125,7 @@ def scan_repo_structure(repo_dir: Path) -> dict:
     exact_names = [
         "demo.py", "eval.py", "evaluate.py", "test.py", "main.py", "run.py",
         "train.py", "app.py", "inference.py", "predict.py", "benchmark.py",
-        "online_demo.py",
+        "online_demo.py", "minimal_example.py",
     ]
 
     candidate_scripts = []
@@ -198,7 +198,15 @@ def _is_ignored_requirement_path(repo_dir: Path, path: Path, max_depth: int) -> 
     if len(relative.parts) > max_depth + 1:
         return True
     ignored_parts = {".git", ".venv", "venv", "__pycache__", "node_modules"}
-    return any(part in ignored_parts or part.startswith(".") for part in relative.parts)
+    if any(part in ignored_parts or part.startswith(".") for part in relative.parts):
+        return True
+
+    lowered_parts = {part.lower() for part in relative.parts[:-1]}
+    if lowered_parts.intersection({"docs", "doc", "tests", "test"}):
+        return True
+
+    lowered_name = relative.name.lower()
+    return any(term in lowered_name for term in ("dev", "test", "doc", "lint"))
 
 
 def _requirement_file_sort_key(repo_dir: Path, path: Path) -> tuple[int, str]:
@@ -233,7 +241,7 @@ def _is_candidate_script(path: Path) -> bool:
         return True
     if stem.startswith(prefix_patterns):
         return True
-    if "demo" in stem:
+    if "demo" in stem or "example" in stem:
         return True
     if name in {"export_onnx_model.py"}:
         return True
@@ -253,6 +261,7 @@ def _script_sort_key(path: str) -> tuple[int, str]:
         "eval.py": 6,
         "evaluate.py": 7,
         "benchmark.py": 8,
+        "minimal_example.py": 8,
         "main.py": 9,
         "test.py": 10,
         "train.py": 20,

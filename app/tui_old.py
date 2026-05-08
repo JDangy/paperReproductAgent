@@ -111,7 +111,7 @@ class TuiSession:
     input_value: str | None = None
     repo: str | None = None
     repo_dir: str | None = None
-    backend: str = "venv"
+    backend: str = "conda"
     workspace: str = "./workspace"
     timeout_minutes: int = 30
     max_repair_attempts: int = 5
@@ -392,7 +392,7 @@ class PaperSmokeTUI:
     def _cmd_help(self, _: str) -> None:
         self._append("Help", "直接输入本地论文 PDF 路径即可开始复现。")
         self._append("Help", "命令：/new [名称], /select N, /input 路径, /submit 路径, /repo URL, /repo-dir 路径")
-        self._append("Help", "运行：/backend venv|docker|local|none, /timeout 分钟数, /repairs 次数, /run")
+        self._append("Help", "运行：/backend conda|venv|docker|local|none, /timeout 分钟数, /repairs 次数, /run")
         self._append("Help", "查看：/status, /logs env|build|smoke|stderr|stdout, /report, !shell命令")
 
     def _cmd_new(self, args: str) -> None:
@@ -445,8 +445,8 @@ class PaperSmokeTUI:
 
     def _cmd_backend(self, args: str) -> None:
         backend = args.strip()
-        if backend not in {"none", "local", "venv", "docker"}:
-            self._append("Config", "后端必须是：none、local、venv 或 docker", level="warning")
+        if backend not in {"none", "local", "venv", "conda", "docker"}:
+            self._append("Config", "后端必须是：none、local、venv、conda 或 docker", level="warning")
             return
         self.active.backend = backend
         self._append("Config", f"backend = {backend}")
@@ -541,7 +541,9 @@ class PaperSmokeTUI:
             return
         kind = args.strip() or "smoke"
         candidates = {
-            "env": Path(session.task_dir) / "env" / "venv_build.log",
+            "env": Path(session.task_dir) / "env" / "conda_build.log",
+            "conda": Path(session.task_dir) / "env" / "conda_build.log",
+            "venv": Path(session.task_dir) / "env" / "venv_build.log",
             "build": Path(session.task_dir) / "env" / "build.log",
             "smoke": Path(session.task_dir) / "runs" / "smoke_001" / "run_summary.json",
             "stderr": Path(session.task_dir) / "runs" / "smoke_001" / "stderr.log",

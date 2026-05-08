@@ -41,7 +41,7 @@ def _format_progress_event(event: ProgressEvent) -> str:
 def _run_pipeline(
     input_value: str,
     workspace: str = settings.default_workspace,
-    backend: str = "docker",
+    backend: str = "conda",
     repo: Optional[str] = None,
     repo_dir: Optional[str] = None,
     timeout_minutes: int = 30,
@@ -87,8 +87,11 @@ def _run_pipeline(
     from app.agents.github_search_agent import GitHubSearchAgent
     from app.agents.repo_evaluation_agent import RepoEvaluationAgent
     from app.agents.docker_build_agent import DockerBuildAgent
+    from app.agents.conda_build_agent import CondaBuildAgent
     from app.agents.venv_build_agent import VenvBuildAgent
     from app.agents.smoke_run_agent import SmokeRunAgent
+    from app.agents.benchmark_reproduction_agent import BenchmarkReproductionAgent
+    from app.agents.simple_reproduction_agent import SimpleReproductionAgent
     from app.agents.report_writer_agent import ReportWriterAgent
 
     agents = [
@@ -105,11 +108,22 @@ def _run_pipeline(
         agents.extend([
             ("Build Docker image", DockerBuildAgent(timeout_minutes=timeout_minutes)),
             ("Run smoke command", SmokeRunAgent(timeout_minutes=timeout_minutes, max_repair_attempts=max_repair_attempts)),
+            ("Run benchmark reproduction", BenchmarkReproductionAgent(timeout_minutes=timeout_minutes)),
+            ("Run simple reproduction", SimpleReproductionAgent(timeout_minutes=timeout_minutes)),
         ])
     elif backend == "venv":
         agents.extend([
             ("Build virtualenv", VenvBuildAgent(timeout_minutes=timeout_minutes)),
             ("Run smoke command", SmokeRunAgent(timeout_minutes=timeout_minutes, max_repair_attempts=max_repair_attempts)),
+            ("Run benchmark reproduction", BenchmarkReproductionAgent(timeout_minutes=timeout_minutes)),
+            ("Run simple reproduction", SimpleReproductionAgent(timeout_minutes=timeout_minutes)),
+        ])
+    elif backend == "conda":
+        agents.extend([
+            ("Build conda env", CondaBuildAgent(timeout_minutes=timeout_minutes)),
+            ("Run smoke command", SmokeRunAgent(timeout_minutes=timeout_minutes, max_repair_attempts=max_repair_attempts)),
+            ("Run benchmark reproduction", BenchmarkReproductionAgent(timeout_minutes=timeout_minutes)),
+            ("Run simple reproduction", SimpleReproductionAgent(timeout_minutes=timeout_minutes)),
         ])
     elif backend == "local":
         state.env_build = EnvironmentBuildResult(
@@ -117,7 +131,11 @@ def _run_pipeline(
             failure_summary="Isolated environment build skipped (backend=local)",
         )
         save_state(state)
-        agents.append(("Run smoke command", SmokeRunAgent(timeout_minutes=timeout_minutes, max_repair_attempts=max_repair_attempts)))
+        agents.extend([
+            ("Run smoke command", SmokeRunAgent(timeout_minutes=timeout_minutes, max_repair_attempts=max_repair_attempts)),
+            ("Run benchmark reproduction", BenchmarkReproductionAgent(timeout_minutes=timeout_minutes)),
+            ("Run simple reproduction", SimpleReproductionAgent(timeout_minutes=timeout_minutes)),
+        ])
     else:  # none
         state.env_build = EnvironmentBuildResult(
             skipped=True,
@@ -166,13 +184,29 @@ def _run_pipeline(
 
             save_state(state)
             if step_ok:
-                emit_progress(desc, "completed", level="success", phase="finish", detail=f"{elapsed_ms / 1000:.1f}s")
+                emit_progress(
+                    desc,
+                    "completed",
+                    level="success",
+                    phase="finish",
+                    detail=f"{elapsed_ms / 1000:.1f}s",
+                    duration_ms=elapsed_ms,
+                    status=state.status,
+                )
             else:
-                if not state.errors or all(e["step"] != desc for e in state.errors):
+                if not state.errors or all(e.get("step") != desc for e in state.errors):
                     state.errors.append({"step": desc, "error": "Step completed with errors"})
                     state.status = "failed"
                     save_state(state)
-                emit_progress(desc, "failed", level="error", phase="fail", detail=f"business check failed ({elapsed_ms / 1000:.1f}s)")
+                emit_progress(
+                    desc,
+                    "failed",
+                    level="error",
+                    phase="fail",
+                    detail=f"business check failed ({elapsed_ms / 1000:.1f}s)",
+                    duration_ms=elapsed_ms,
+                    status=state.status,
+                )
     finally:
         disable_telemetry()
 
@@ -185,10 +219,20 @@ def _run_pipeline(
 
 def _step_succeeded(desc: str, state: TaskState) -> bool:
     """Check business-level success for a pipeline step based on TaskState."""
-    if desc in {"Build virtualenv", "Build Docker image"}:
+    if desc in {"Build virtualenv", "Build conda env", "Build Docker image"}:
         return bool(state.env_build and state.env_build.build_success)
     if desc == "Run smoke command":
         return bool(state.smoke_run and state.smoke_run.success)
+    if desc == "Run simple reproduction":
+        return bool(
+            state.reproduction_run
+            and (state.reproduction_run.success or state.reproduction_run.skipped)
+        )
+    if desc == "Run benchmark reproduction":
+        return bool(
+            state.benchmark_run
+            and (state.benchmark_run.success or state.benchmark_run.skipped)
+        )
     if desc == "Write report":
         return state.report is not None
     if desc == "Ingest paper":
@@ -224,13 +268,21 @@ def _normalize_repo_url(url: str) -> str:
     return url.lower()
 
 
+def _resolve_gold_item_input(item: dict, gold_path: Path) -> str:
+    """Prefer checked-in local PDFs when a gold item uses an external paper URL."""
+    local_pdf = gold_path.parent / "gold_papers" / f"{item['name']}.pdf"
+    if local_pdf.exists():
+        return str(local_pdf)
+    return item["input"]
+
+
 @app.command()
 def run(
     input: str = typer.Option(..., "--input", "--paper-path", help="Local paper PDF path"),
     repo: Optional[str] = typer.Option(None, "--repo", help="Manual GitHub repo URL"),
     repo_dir: Optional[str] = typer.Option(None, "--repo-dir", help="Local repository directory"),
     workspace: str = typer.Option(settings.default_workspace, "--workspace"),
-    backend: str = typer.Option(settings.default_backend, "--backend", help="Execution backend: none, local, venv, or docker"),
+    backend: str = typer.Option(settings.default_backend, "--backend", help="Execution backend: none, local, venv, conda, or docker"),
     timeout_minutes: int = typer.Option(settings.default_timeout_minutes, "--timeout-minutes"),
     max_repair_attempts: int = typer.Option(settings.default_max_repair_attempts, "--max-repair-attempts"),
     skip_docker_build: bool = typer.Option(False, "--skip-docker-build", help="Deprecated: use --backend none"),
@@ -238,8 +290,8 @@ def run(
     if skip_docker_build:
         backend = "none"
 
-    if backend not in ("none", "local", "venv", "docker"):
-        console.print(f"[red]Invalid backend: {backend}. Must be none, local, venv, or docker.[/red]")
+    if backend not in ("none", "local", "venv", "conda", "docker"):
+        console.print(f"[red]Invalid backend: {backend}. Must be none, local, venv, conda, or docker.[/red]")
         raise typer.Exit(1)
 
     console.print("[bold cyan]Paper Reproduction Smoke Agent v0.1.1[/bold cyan]")
@@ -277,7 +329,7 @@ def run(
 def eval_goldset(
     gold_set: str = typer.Option("examples/gold_set.json", "--gold-set", help="Path to gold set JSON"),
     workspace: str = typer.Option("./goldset_results", "--workspace"),
-    backend: str = typer.Option("none", "--backend", help="Execution backend: none, local, venv, or docker"),
+    backend: str = typer.Option("none", "--backend", help="Execution backend: none, local, venv, conda, or docker"),
     max_items: int = typer.Option(0, "--max-items", help="Max items to run (0=all)"),
     timeout_minutes: int = typer.Option(settings.default_timeout_minutes, "--timeout-minutes"),
     max_repair_attempts: int = typer.Option(settings.default_max_repair_attempts, "--max-repair-attempts"),
@@ -300,8 +352,11 @@ def eval_goldset(
 
     for i, item in enumerate(gold_items):
         name = item["name"]
+        run_input = _resolve_gold_item_input(item, gold_path)
         console.rule(f"[bold]{i + 1}/{len(gold_items)}: {name}[/bold]")
         console.print(f"Input: {item['input']}")
+        if run_input != item["input"]:
+            console.print(f"Local PDF: {run_input}")
         console.print(f"Expected repo: {item['expected_repo']}")
         console.print(f"Hint type: {item['repo_hint_type']}")
         console.print()
@@ -319,7 +374,7 @@ def eval_goldset(
 
                 with progress_events(on_progress):
                     state = _run_pipeline(
-                        input_value=item["input"],
+                        input_value=run_input,
                         workspace=str(Path(workspace) / "runs"),
                         backend=backend,
                         timeout_minutes=timeout_minutes,
@@ -334,6 +389,7 @@ def eval_goldset(
         result = {
             "name": name,
             "input": item["input"],
+            "effective_input": run_input,
             "expected_repo": item["expected_repo"],
             "difficulty": item["difficulty"],
             "repo_hint_type": item["repo_hint_type"],
@@ -490,14 +546,14 @@ def print_report(
 @app.command("tui")
 def tui(
     workspace: str = typer.Option(settings.default_workspace, "--workspace"),
-    backend: str = typer.Option(settings.default_backend, "--backend", help="Execution backend: none, local, venv, or docker"),
+    backend: str = typer.Option(settings.default_backend, "--backend", help="Execution backend: none, local, venv, conda, or docker"),
     timeout_minutes: int = typer.Option(settings.default_timeout_minutes, "--timeout-minutes"),
     max_repair_attempts: int = typer.Option(settings.default_max_repair_attempts, "--max-repair-attempts"),
 ):
     """Launch the OpenCode-inspired terminal UI."""
     sanitize_proxy_env()
-    if backend not in ("none", "local", "venv", "docker"):
-        console.print(f"[red]Invalid backend: {backend}. Must be none, local, venv, or docker.[/red]")
+    if backend not in ("none", "local", "venv", "conda", "docker"):
+        console.print(f"[red]Invalid backend: {backend}. Must be none, local, venv, conda, or docker.[/red]")
         raise typer.Exit(1)
 
     from app.tui import run_tui

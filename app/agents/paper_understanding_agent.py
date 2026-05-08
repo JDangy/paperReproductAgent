@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from app.core.file_utils import save_json
+from app.core.progress import emit_progress
 from app.core.state import TaskState, ReproductionBrief
 from app.tools.llm import call_llm_json
 from app.tools.paper_parser import (
@@ -12,7 +13,7 @@ from app.tools.paper_parser import (
     extract_tasks,
     extract_method_keywords,
 )
-from app.tools.pdf_tool import extract_github_links
+from app.tools.pdf_tool import extract_github_links, extract_reproduction_links
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,25 @@ frequently (max 10)
 Only include items you are confident about. Return empty lists if unsure."""
 
 
+_PROTOCOL_PROMPT = """\
+You are a benchmark protocol extraction assistant. Given paper text, extract the
+paper-table reproduction protocol, not just the task summary.
+
+Return a JSON object with exactly these keys:
+- "main_tables": list of table/figure identifiers or names likely needed for reproduction
+- "tasks": list of task names
+- "datasets": list of dataset names
+- "splits": list of dataset split names or protocols
+- "metrics": list of metric names
+- "model_variants": list of model/checkpoint/config variants
+- "reference_values": list of objects with keys metric, value, dataset, model, table, notes
+- "hardware": list of hardware or speed-measurement conditions
+- "preprocessing": list of preprocessing/protocol details
+- "confidence": float between 0 and 1
+
+If a field is unclear, return an empty list for that field. Do not invent values."""
+
+
 class PaperUnderstandingAgent:
     def run(self, state: TaskState) -> TaskState:
         task_dir = Path(state.task_dir)
@@ -41,17 +61,58 @@ class PaperUnderstandingAgent:
         if not parsed_text_path.exists():
             state.errors.append({"agent": "PaperUnderstandingAgent", "error": "parsed_text.txt not found"})
             state.status = "failed"
+            emit_progress("Understand paper", "parsed text missing", level="error", detail=str(parsed_text_path))
             return state
 
+        emit_progress("Understand paper", "loading parsed paper text", detail=str(parsed_text_path))
         text = parsed_text_path.read_text(encoding="utf-8", errors="ignore")
+        emit_progress("Understand paper", "loaded paper text", detail=f"{len(text):,} characters", text_chars=len(text))
 
+        emit_progress("Understand paper", "asking LLM for reproduction brief", detail="task, datasets, metrics, GitHub links")
         brief = self._llm_understand(text)
         if brief is None:
             logger.info("LLM unavailable or failed, falling back to heuristic parsing")
+            emit_progress("Understand paper", "LLM brief unavailable, using heuristics", level="warning")
             brief = self._heuristic_understand(text)
+        else:
+            emit_progress(
+                "Understand paper",
+                "LLM brief extracted",
+                detail=brief.task or "task not detected",
+                dataset_count=len(brief.datasets),
+                metric_count=len(brief.metrics),
+                github_link_count=len(brief.github_links_in_paper),
+            )
+            brief.github_links_in_paper = _merge_links(
+                brief.github_links_in_paper,
+                extract_reproduction_links(text),
+            )
+        emit_progress("Understand paper", "extracting benchmark protocol", detail="tables, splits, metrics, reference values")
+        protocol = self._llm_extract_protocol(text)
+        if protocol:
+            brief.benchmark_protocol = protocol
+            emit_progress(
+                "Understand paper",
+                "benchmark protocol extracted",
+                detail=f"confidence={protocol.get('confidence', 'unknown')}",
+                protocol_confidence=protocol.get("confidence"),
+            )
+        else:
+            emit_progress("Understand paper", "benchmark protocol unavailable", level="warning")
 
         state.reproduction_brief = brief
         save_json(task_dir / "paper" / "reproduction_brief.json", brief)
+        if brief.benchmark_protocol:
+            save_json(task_dir / "paper" / "benchmark_protocol_brief.json", brief.benchmark_protocol)
+        emit_progress(
+            "Understand paper",
+            "saved reproduction brief",
+            detail=f"datasets={len(brief.datasets)}, metrics={len(brief.metrics)}, links={len(brief.github_links_in_paper)}",
+            task=brief.task,
+            datasets=brief.datasets,
+            metrics=brief.metrics,
+            github_links=brief.github_links_in_paper,
+        )
 
         state.status = "paper_understood"
         return state
@@ -86,6 +147,30 @@ class PaperUnderstandingAgent:
             datasets=extract_datasets(text),
             metrics=extract_metrics(text),
             method_keywords=extract_method_keywords(text),
-            github_links_in_paper=extract_github_links(text),
+            github_links_in_paper=_merge_links(extract_github_links(text), extract_reproduction_links(text)),
             confidence=0.5,
         )
+
+    def _llm_extract_protocol(self, text: str) -> dict | None:
+        truncated = text[:12000]
+        result = call_llm_json(
+            system_prompt=_PROTOCOL_PROMPT,
+            user_prompt=f"Extract benchmark protocol details from this paper text:\n\n{truncated}",
+            purpose="paper_protocol_extraction",
+            max_tokens=3072,
+        )
+        if not isinstance(result, dict):
+            return None
+        return result
+
+
+def _merge_links(primary: list[str], secondary: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for link in [*primary, *secondary]:
+        key = link.lower().rstrip("/")
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(link)
+    return merged

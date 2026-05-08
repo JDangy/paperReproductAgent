@@ -1,8 +1,8 @@
 # Paper Reproduction Smoke Agent
 
-Automated pipeline that takes an academic paper (PDF), locates the corresponding code repository, builds the environment, runs a smoke test, and produces a reproducibility report.
+Automated pipeline that takes an academic paper (PDF), locates the corresponding code repository, builds the environment, runs a smoke test, attempts a lightweight end-to-end reproduction when safe, and produces a reproducibility report.
 
-> **Scope:** This tool performs a *smoke test* (can the repo be installed and its entry-point script executed?) — it does **not** verify numerical results, reproduce training, or confirm paper claims.
+> **Scope:** This tool targets lightweight reproduction for simple papers: it can run bundled demos, inference examples, small evaluations, or tests when they do not require training, private files, or large datasets. It does **not** reproduce large-scale training or guarantee that paper metrics are numerically matched.
 
 ---
 
@@ -18,8 +18,8 @@ poetry install
 cp .env.example .env
 # Edit .env — at minimum set OPENAI_API_KEY (required for paper understanding)
 
-# 3. Run against a local PDF
-poetry run paper-smoke run --input /path/to/paper.pdf
+# 3. Run against a local PDF with a conda environment
+poetry run paper-smoke run --input /path/to/paper.pdf --backend conda
 
 # 4. Or launch the interactive TUI
 poetry run paper-smoke tui
@@ -33,7 +33,8 @@ poetry run paper-smoke tui
 
 - Python >= 3.8
 - Git
-- (Optional) Docker — needed for `--backend docker`
+- Conda — recommended for local environment builds without Docker permissions
+- (Optional) Docker — only needed for `--backend docker`
 
 ### Steps
 
@@ -64,7 +65,7 @@ Copy `.env.example` to `.env` and fill in the values:
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key (alternative LLM backend) |
 | `GITHUB_TOKEN` | No | — | GitHub personal access token (increases API rate limit) |
 | `DEFAULT_WORKSPACE` | No | `./workspace` | Default workspace directory |
-| `DEFAULT_BACKEND` | No | `venv` | Default execution backend: `none`, `local`, `venv`, `docker` |
+| `DEFAULT_BACKEND` | No | `conda` | Default execution backend: `none`, `local`, `venv`, `conda`, `docker` |
 | `DEFAULT_TIMEOUT_MINUTES` | No | `30` | Timeout per pipeline step |
 | `DEFAULT_MAX_REPAIR_ATTEMPTS` | No | `5` | Max automatic dependency repair attempts |
 | `DEFAULT_PREFER_CPU` | No | `true` | Prefer CPU-only packages |
@@ -85,15 +86,18 @@ paper-smoke run --input /path/to/paper.pdf [OPTIONS]
 | `--repo` | — | Manually specify a GitHub repo URL |
 | `--repo-dir` | — | Use a local repo directory instead of cloning |
 | `--workspace` | `./workspace` | Output workspace directory |
-| `--backend` | `venv` | `none`, `local`, `venv`, or `docker` |
+| `--backend` | `conda` | `none`, `local`, `venv`, `conda`, or `docker` |
 | `--timeout-minutes` | `30` | Per-step timeout |
-| `--max-repair-attempts` | `5` | Max dependency repair retries (venv only) |
+| `--max-repair-attempts` | `5` | Max dependency repair retries (`venv` and `conda`) |
 
 **Examples:**
 
 ```bash
 # Minimal: parse paper, search GitHub, evaluate repo only (no execution)
 paper-smoke run --input paper.pdf --backend none
+
+# Full pipeline with a local conda environment (recommended when Docker is unavailable)
+paper-smoke run --input paper.pdf --backend conda
 
 # Full pipeline with virtualenv
 paper-smoke run --input paper.pdf --backend venv
@@ -121,7 +125,7 @@ Key TUI commands:
 | `/input <path>` | Set paper PDF path |
 | `/repo <url>` | Set GitHub repo URL |
 | `/repo-dir <path>` | Set local repo directory |
-| `/backend <type>` | Set backend (`none`/`local`/`venv`/`docker`) |
+| `/backend <type>` | Set backend (`none`/`local`/`venv`/`conda`/`docker`) |
 | `/run` | Start the pipeline |
 | `/report` | View generated report |
 | `/logs [env\|build\|smoke\|stderr\|stdout]` | View step logs |
@@ -150,16 +154,17 @@ paper-smoke eval-goldset --gold-set examples/gold_set.json --backend none
 ```
 PDF Input ──> Paper Ingest ──> Paper Understanding ──> GitHub Search
                                                          │
-                     Report <── Smoke Test <── Env Build <── Repo Evaluation
+        Report <── Simple Reproduction <── Smoke Test <── Env Build <── Repo Evaluation
 ```
 
 1. **Paper Ingest** — Extract text and metadata from the PDF.
 2. **Paper Understanding** — LLM-based extraction of task, datasets, metrics, method keywords, and GitHub links.
 3. **GitHub Search** — Search for matching repositories (skipped if `--repo` or `--repo-dir` is provided).
 4. **Repo Evaluation** — Clone the repo, scan structure, compute runnable score, detect risk flags.
-5. **Environment Build** — Create an isolated environment (Docker / virtualenv / none).
-6. **Smoke Test** — Execute an entry-point command (`--help`, demo script, or pytest).
-7. **Report** — Generate a Markdown report with final status and actionable next steps.
+5. **Environment Build** — Create an isolated environment (conda / virtualenv / Docker / none).
+6. **Smoke Test** — Execute a conservative entry-point command (`--help`, demo script, or pytest) to verify the environment and entry point.
+7. **Simple Reproduction** — When the repository appears suitable, run a non-`--help` lightweight demo / inference / evaluation command using bundled resources, and record outputs.
+8. **Report** — Generate a Markdown report with final status and actionable next steps.
 
 ---
 
@@ -169,10 +174,13 @@ The `final_status` field in the report is the single most important output. Here
 
 | Status | Meaning |
 |---|---|
+| `reproduction_success` | A lightweight end-to-end reproduction command ran successfully. This is stronger than smoke success, but still not proof of full paper-metric parity. |
 | `success` | A non-trivial command (demo / pytest) ran and exited with code 0. The repo installs and its entry point works. |
 | `partial_success_help_only` | Only the `--help` flag succeeded. **This is NOT a full reproduction.** It means the package is importable and the CLI responds, but no actual inference or evaluation code was executed. |
-| `repo_found_but_env_failed` | The repository was found but the environment (Docker/venv) could not be built — typically a dependency conflict or missing system library. |
+| `repo_found_but_env_failed` | The repository was found but the environment (conda/venv/Docker) could not be built — typically a dependency conflict or missing system library. |
 | `repo_found_but_smoke_failed` | The environment was built, but the smoke command failed (missing weights, data, wrong arguments, etc.). |
+| `repo_found_but_reproduction_failed` | The repository and environment were available, but the lightweight reproduction command failed. |
+| `repo_found_reproduction_not_run` | The repository was found, but no safe lightweight reproduction command was available. |
 | `repo_found_smoke_not_run` | The repository was found and statically evaluated, but no code was executed (`--backend none`). |
 | `repo_not_found` | No suitable repository was found via GitHub search or paper links. |
 | `paper_parse_failed` | The PDF could not be parsed (corrupt file, scanned image, etc.). |
@@ -190,6 +198,12 @@ This status means the tool was only able to verify that `python script.py --help
 
 A `partial_success_help_only` result should be treated as a starting point for manual investigation, not as proof of reproducibility.
 
+### Lightweight Reproduction Scope
+
+The simple reproduction stage is intentionally conservative. It may run commands such as `python demo.py`, `python infer.py --input examples/sample.png`, or `pytest -q` when those commands are safe and self-contained. It blocks training-looking scripts, `--help`/version-only commands, shell metacharacters, network-looking arguments, and repositories flagged as likely requiring large datasets.
+
+This stage is meant to fully exercise simple repositories that ship their own sample inputs or tests. If a paper requires checkpoints, large datasets, or long CUDA training, the agent should report that limitation rather than pretending the paper was reproduced.
+
 ---
 
 ## Project Structure
@@ -203,9 +217,11 @@ paperReproductAgent/
 │   │   ├── paper_understanding_agent.py
 │   │   ├── github_search_agent.py
 │   │   ├── repo_evaluation_agent.py
+│   │   ├── conda_build_agent.py
 │   │   ├── docker_build_agent.py
 │   │   ├── venv_build_agent.py
 │   │   ├── smoke_run_agent.py
+│   │   ├── simple_reproduction_agent.py
 │   │   └── report_writer_agent.py
 │   ├── core/
 │   │   ├── config.py             # Settings (loaded from .env)
@@ -235,7 +251,7 @@ paperReproductAgent/
 
 - **API keys** are read from the `.env` file or environment variables. Never commit `.env` to version control. The `.env` file is excluded via `.gitignore`.
 - **LLM calls:** Paper text is sent to the configured LLM API (OpenAI-compatible or Anthropic) for understanding and report generation. If your papers contain sensitive or proprietary data, consider using a self-hosted model via `OPENAI_BASE_URL`.
-- **Code execution:** The `local` and `venv` backends run cloned repository code on your machine. The `docker` backend provides stronger isolation. The `none` backend performs static analysis only and executes no external code.
+- **Code execution:** The `local`, `venv`, and `conda` backends run cloned repository code on your machine. The `conda` backend creates a task-local conda environment and is recommended when Docker is unavailable. The `docker` backend provides stronger isolation. The `none` backend performs static analysis only and executes no external code.
 - **GitHub token:** Providing `GITHUB_TOKEN` increases the API rate limit for repository searches but is not required. Use a token with minimal permissions (no write access needed).
 - **Network access:** The tool makes outbound HTTP requests to: GitHub API, arXiv, the configured LLM API, and PyPI (for dependency installation). No inbound ports are opened.
 

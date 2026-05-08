@@ -299,7 +299,7 @@ class PaperAgentApp(App):
         self._add_assistant(
             "直接输入本地论文 PDF 路径即可开始复现。\n"
             "命令：/help, /clear, /status, /plan, /act, /input 路径, /repo URL, /repo-dir 路径\n"
-            "运行：/backend venv|docker|local|none, /timeout 分钟数, /repairs 次数, /run\n"
+            "运行：/backend conda|venv|docker|local|none, /timeout 分钟数, /repairs 次数, /run\n"
             "查看：/status, /logs env|build|smoke|stderr|stdout, /report, !shell命令"
         )
 
@@ -345,8 +345,8 @@ class PaperAgentApp(App):
 
     def _cmd_backend(self, args: str) -> None:
         backend = args.strip()
-        if backend not in {"none", "local", "venv", "docker"}:
-            self._add_error("后端必须是：none、local、venv 或 docker")
+        if backend not in {"none", "local", "venv", "conda", "docker"}:
+            self._add_error("后端必须是：none、local、venv、conda 或 docker")
             return
         self.session.backend = backend
         self._update_status()
@@ -388,7 +388,9 @@ class PaperAgentApp(App):
             return
         kind = args.strip() or "smoke"
         candidates = {
-            "env": Path(s.task_dir) / "env" / "venv_build.log",
+            "env": Path(s.task_dir) / "env" / "conda_build.log",
+            "conda": Path(s.task_dir) / "env" / "conda_build.log",
+            "venv": Path(s.task_dir) / "env" / "venv_build.log",
             "build": Path(s.task_dir) / "env" / "build.log",
             "smoke": Path(s.task_dir) / "runs" / "smoke_001" / "run_summary.json",
             "stderr": Path(s.task_dir) / "runs" / "smoke_001" / "stderr.log",
@@ -473,6 +475,8 @@ class PaperAgentApp(App):
                     self._timeline.add_assistant(text)
                 elif event.type == "error":
                     self._timeline.add_error(text)
+                elif event.type in {"tool_started", "tool_progress", "tool_finished", "tool_failed"}:
+                    self._replay_pipeline_event(event)
 
         self._add_assistant(f"已恢复会话 session-{session_id}")
         self._update_status()
@@ -549,7 +553,10 @@ class PaperAgentApp(App):
 
             # Run the blocking pipeline in executor (separate thread)
             def run_with_progress():
+                persist_progress = make_progress_bridge(lambda _: None, self.store)
+
                 def on_progress(event: ProgressEvent) -> None:
+                    persist_progress(event)
                     # Called from executor thread → must use call_from_thread
                     self.call_from_thread(
                         self._on_pipeline_progress, event
@@ -598,21 +605,38 @@ class PaperAgentApp(App):
         message = event.message
         detail = event.detail
         phase = event.phase
+        duration = None
+        duration_ms = event.data.get("duration_ms")
+        if isinstance(duration_ms, (int, float)):
+            duration = duration_ms / 1000.0
 
         if phase == "start":
             self._get_or_create_tool_card(stage, message)
         elif phase == "finish":
-            self._update_tool_card(stage, status="success", detail=detail)
+            self._update_tool_card(stage, status="success", detail=detail, duration=duration)
         elif phase == "fail":
-            self._update_tool_card(stage, status="failed", detail=detail)
+            self._update_tool_card(stage, status="failed", detail=detail, duration=duration)
         else:
             # "progress" or unknown – update existing card
             card = self._get_or_create_tool_card(stage, message)
-            card.update(detail=detail)
+            card.update(message=message, detail=detail or message, duration=duration)
 
         # Also scroll timeline
         if self._timeline:
             self._timeline.scroll_end(animate=False)
+
+    def _replay_pipeline_event(self, event: AgentEvent) -> None:
+        payload = event.payload
+        self._on_pipeline_progress(
+            ProgressEvent(
+                stage=str(payload.get("stage") or "Pipeline"),
+                message=str(payload.get("message") or ""),
+                level=str(payload.get("level") or "info"),
+                phase=str(payload.get("phase") or "progress"),
+                detail=payload.get("detail"),
+                data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+            )
+        )
 
     def _append_resolution(self, resolution: PaperInputResolution) -> None:
         if resolution.success:

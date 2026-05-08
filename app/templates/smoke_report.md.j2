@@ -47,6 +47,12 @@
 - **评估指标:** {{ brief.metrics | join(", ") if brief.metrics else "未发现" }}
 - **方法关键词:** {{ brief.method_keywords | join(", ") if brief.method_keywords else "未发现" }}
 - **论文中 GitHub 链接数:** {{ brief.github_links_in_paper | length }}
+{% if brief.benchmark_protocol %}
+- **Benchmark 协议抽取:**
+```json
+{{ brief.benchmark_protocol | tojson(indent=2) }}
+```
+{% endif %}
 {% else %}
 复现要点未生成。
 {% endif %}
@@ -88,6 +94,12 @@
 - **可运行分数:** {{ repo_eval.runnable_score }}
 - **候选脚本:** {{ repo_eval.candidate_scripts | join(", ") if repo_eval.candidate_scripts else "无" }}
 - **风险标记:** {{ repo_eval.risk_flags | join(", ") if repo_eval.risk_flags else "无" }}
+{% if repo_eval.benchmark_surface %}
+- **Benchmark Surface 分析:**
+```json
+{{ repo_eval.benchmark_surface | tojson(indent=2) }}
+```
+{% endif %}
 {% else %}
 仓库未被评估。
 {% endif %}
@@ -146,6 +158,160 @@
 
 ---
 
+## 协议化 Benchmark 复现
+
+{% if backend == "none" %}
+未执行协议化 Benchmark（backend=none，仅静态分析）。
+{% elif benchmark_run %}
+- **目标等级:** {{ benchmark_run.target_level }}
+- **达成等级:** {{ benchmark_run.achieved_level or "N/A" }}
+- **是否适合尝试:** {{ benchmark_run.eligible }}
+- **是否跳过:** {{ benchmark_run.skipped }}
+- **跳过原因:** {{ benchmark_run.skip_reason or "N/A" }}
+- **是否成功:** {{ benchmark_run.success }}
+- **退出码:** {{ benchmark_run.exit_code if benchmark_run.exit_code is not none else "N/A" }}
+- **摘要:** {{ benchmark_run.summary or "N/A" }}
+{% if benchmark_run.selected_spec %}
+- **任务族:** `{{ benchmark_run.selected_spec.task_family }}`
+- **选中协议:** `{{ benchmark_run.selected_spec.id }}` / {{ benchmark_run.selected_spec.title }}
+- **数据集:** {{ benchmark_run.selected_spec.dataset.name }}{% if benchmark_run.selected_spec.dataset.split %} / {{ benchmark_run.selected_spec.dataset.split }}{% endif %}
+- **执行命令:** `{{ benchmark_run.selected_spec.command | join(" ") }}`
+{% endif %}
+{% if benchmark_run.downgrade_reasons %}
+- **降级原因:**
+{% for reason in benchmark_run.downgrade_reasons %}
+  - {{ reason }}
+{% endfor %}
+{% else %}
+- **降级原因:** 无
+{% endif %}
+- **协议一致性:**
+{% if benchmark_run.protocol_match %}
+```json
+{{ benchmark_run.protocol_match | tojson(indent=2) }}
+```
+{% else %}
+无结构化协议一致性信息
+{% endif %}
+- **Benchmark 指标:**
+{% if benchmark_run.metrics %}
+```json
+{{ benchmark_run.metrics | tojson(indent=2) }}
+```
+{% else %}
+无结构化指标
+{% endif %}
+- **参考结果:**
+{% if benchmark_run.reference_results %}
+```json
+{{ benchmark_run.reference_results | tojson(indent=2) }}
+```
+{% else %}
+无可对比参考结果
+{% endif %}
+{% if benchmark_run.comparisons %}
+- **指标对比:**
+
+| 指标 | 复现结果 | 参考结果 | 差值 | 状态 |
+|------|----------|----------|------|------|
+{% for c in benchmark_run.comparisons %}| {{ c.metric }} | {{ c.actual }} | {{ c.expected }} | {{ c.delta if c.delta is defined else "N/A" }} | {{ c.status }} |
+{% endfor %}
+{% endif %}
+{% if benchmark_run.parser_hints %}
+- **指标解析建议:**
+```json
+{{ benchmark_run.parser_hints | tojson(indent=2) }}
+```
+{% endif %}
+{% if benchmark_run.failure_diagnosis %}
+- **失败诊断:**
+```json
+{{ benchmark_run.failure_diagnosis | tojson(indent=2) }}
+```
+{% endif %}
+{% if benchmark_run.output_artifacts %}
+- **输出产物:**
+{% for artifact in benchmark_run.output_artifacts %}
+  - `{{ artifact }}`
+{% endfor %}
+{% endif %}
+- **标准输出:** `{{ benchmark_run.stdout_path or "N/A" }}`
+- **标准错误:** `{{ benchmark_run.stderr_path or "N/A" }}`
+{% else %}
+未执行协议化 Benchmark。
+{% endif %}
+
+{% if benchmark_plan %}
+### Benchmark 候选协议
+
+| Level | 任务族 | 协议 | 可执行 |
+|-------|--------|------|--------|
+{% for spec in benchmark_plan %}| {{ spec.level }} | {{ spec.task_family }} | {{ spec.title }} | {{ spec.runnable }} |
+{% endfor %}
+{% endif %}
+
+---
+
+## 轻量完整复现
+
+{% if backend == "none" %}
+未执行轻量完整复现（backend=none，仅静态分析）。
+{% elif reproduction_run %}
+- **是否适合尝试:** {{ reproduction_run.eligible }}
+- **是否跳过:** {{ reproduction_run.skipped }}
+- **跳过原因:** {{ reproduction_run.skip_reason or "N/A" }}
+- **执行命令:** `{{ reproduction_run.command.display if reproduction_run.command else "N/A" }}`
+- **命令原因:** {{ reproduction_run.command.reason if reproduction_run.command else "N/A" }}
+- **是否成功:** {{ reproduction_run.success }}
+- **退出码:** {{ reproduction_run.exit_code if reproduction_run.exit_code is not none else "N/A" }}
+- **是否超时:** {{ reproduction_run.timed_out }}
+- **摘要:** {{ reproduction_run.summary or "N/A" }}
+{% if reproduction_run.output_artifacts %}
+- **输出产物:**
+{% for artifact in reproduction_run.output_artifacts %}
+  - `{{ artifact }}`
+{% endfor %}
+{% else %}
+- **输出产物:** 无新增/修改文件记录
+{% endif %}
+{% if not reproduction_run.success and reproduction_run.failure_type %}
+- **失败类型:** `{{ reproduction_run.failure_type }}`
+{% if reproduction_run.failure_evidence %}
+- **错误证据:** `{{ reproduction_run.failure_evidence }}`
+{% endif %}
+{% endif %}
+- **复现指标:**
+{% if reproduction_run.metrics %}
+```json
+{{ reproduction_run.metrics | tojson(indent=2) }}
+```
+{% else %}
+无结构化指标
+{% endif %}
+- **论文/官方参考结果:**
+{% if reproduction_run.reference_results %}
+```json
+{{ reproduction_run.reference_results | tojson(indent=2) }}
+```
+{% else %}
+无可对比参考结果
+{% endif %}
+{% if reproduction_run.comparisons %}
+- **指标对比:**
+
+| 指标 | 复现结果 | 参考结果 | 差值 | 状态 |
+|------|----------|----------|------|------|
+{% for c in reproduction_run.comparisons %}| {{ c.metric }} | {{ c.actual }} | {{ c.expected }} | {{ c.delta if c.delta is defined else "N/A" }} | {{ c.status }} |
+{% endfor %}
+{% endif %}
+- **标准输出:** `{{ reproduction_run.stdout_path or "N/A" }}`
+- **标准错误:** `{{ reproduction_run.stderr_path or "N/A" }}`
+{% else %}
+未执行轻量完整复现。
+{% endif %}
+
+---
+
 ## 错误记录
 
 {% if errors %}
@@ -197,5 +363,5 @@
 - 状态文件: `state.json`
 - 论文文本: `paper/parsed_text.txt`
 - 仓库克隆: `repos/cloned_repo/`
-- 构建日志: `env/build.log` 或 `env/venv_build.log`
+- 构建日志: `env/conda_build.log`、`env/venv_build.log` 或 `env/build.log`
 - Smoke 日志: `runs/smoke_001/`

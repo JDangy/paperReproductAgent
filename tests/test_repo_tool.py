@@ -46,6 +46,10 @@ def test_find_requirement_files_in_common_subdirectories(tmp_path):
     nested_dir = repo_dir / "metric_depth"
     nested_dir.mkdir()
     (nested_dir / "requirements-extra.txt").write_text("torch\n", encoding="utf-8")
+    docs_dir = repo_dir / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "requirements.txt").write_text("sphinx\n", encoding="utf-8")
+    (repo_dir / "requirements-dev.txt").write_text("pytest\n", encoding="utf-8")
 
     files = [path.relative_to(repo_dir).as_posix() for path in find_requirement_files(repo_dir)]
 

@@ -55,6 +55,44 @@ def test_venv_argv_rewrites_python_to_venv_python(tmp_path):
     assert argv == [str(tmp_path / "env" / "venv" / "bin" / "python"), "demo.py", "--help"]
 
 
+def test_conda_smoke_uses_conda_python(tmp_path, monkeypatch):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    task_dir = tmp_path / "task_test"
+    conda_python = tmp_path / "env" / "conda_env" / "bin" / "python"
+    state = TaskState(
+        task_id="task_test",
+        input_value="paper.pdf",
+        workspace_dir=str(tmp_path),
+        task_dir=str(task_dir),
+        backend="conda",
+        env_build=EnvironmentBuildResult(
+            build_success=True,
+            environment_path=str(tmp_path / "env" / "conda_env"),
+            python_executable=str(conda_python),
+        ),
+        repo_evaluation=RepoEvaluation(
+            repo_dir=str(repo_dir),
+            candidate_scripts=["demo.py"],
+        ),
+    )
+    agent = SmokeRunAgent()
+    command = SmokeCommand(argv=["python", "demo.py", "--help"], display="python demo.py --help")
+    seen = {}
+    monkeypatch.setattr(agent, "_select_smoke_command", lambda _: command)
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = agent.run(state)
+
+    assert result.smoke_run.success
+    assert seen["argv"] == [str(conda_python), "demo.py", "--help"]
+
+
 def test_venv_smoke_repairs_missing_dependency_and_retries(tmp_path, monkeypatch):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()

@@ -120,7 +120,7 @@ class SmokeRunAgent:
             return state
 
         # Isolated backends require a successful environment build.
-        if backend in {"docker", "venv"}:
+        if backend in {"docker", "venv", "conda"}:
             if not state.env_build or not state.env_build.build_success:
                 emit_progress("Run smoke command", "skipped", level="warning", detail=f"{backend} environment did not build")
                 state.smoke_run = SmokeRunResult(summary=f"Skipped because {backend} environment build did not succeed")
@@ -265,7 +265,7 @@ class SmokeRunAgent:
                 cwd=state.repo_evaluation.repo_dir,
                 timeout=timeout,
             )
-        if state.backend == "venv":
+        if state.backend in {"venv", "conda"}:
             return subprocess.run(
                 self._venv_argv(command.argv, state, task_dir),
                 capture_output=True,
@@ -296,7 +296,7 @@ class SmokeRunAgent:
 
     def _can_repair_missing_dependency(self, backend: str, failure_type: str | None, attempt_no: int) -> bool:
         return (
-            backend == "venv"
+            backend in {"venv", "conda"}
             and self.max_repair_attempts > 0
             and attempt_no <= self.max_repair_attempts
             and failure_type == "missing_dependency"
@@ -550,6 +550,7 @@ runpy.run_path(str(script), run_name="__main__")
     def _build_heuristic_candidates(self, scripts: list[str]) -> list[dict]:
         """Build all possible heuristic candidates with scores."""
         priority = [
+            ("minimal_example.py", ["python", "minimal_example.py"], "demo", 95),
             ("demo.py", ["python", "demo.py", "--help"], "help", 90),
             ("demo.py", ["python", "demo.py"], "demo", 80),
             ("test.py", ["python", "test.py", "--help"], "help", 85),
@@ -646,6 +647,7 @@ runpy.run_path(str(script), run_name="__main__")
 
     def _heuristic_select(self, scripts: list[str]) -> SmokeCommand | None:
         priority = [
+            ("minimal_example.py", ["python", "minimal_example.py"], "demo"),
             ("demo.py", ["python", "demo.py", "--help"], "help"),
             ("demo.py", ["python", "demo.py"], "demo"),
             ("test.py", ["python", "test.py", "--help"], "help"),
@@ -690,6 +692,8 @@ def _argparse_script_sort_key(script: str) -> tuple[int, str]:
     name = path.name.lower()
     stem = path.stem.lower()
     if name == "demo.py":
+        return (0, script)
+    if name == "minimal_example.py":
         return (0, script)
     if stem in {"infer", "inference", "predict", "eval", "evaluate", "amg"}:
         return (1, script)

@@ -30,6 +30,12 @@ def disable_telemetry() -> None:
     _telemetry_sink = None
 
 
+def telemetry_records() -> list:
+    if _telemetry_sink is None:
+        return []
+    return list(_telemetry_sink)
+
+
 def _get_client() -> Any | None:
     if OpenAI is None:
         logger.debug("openai package is not installed, skipping LLM call")

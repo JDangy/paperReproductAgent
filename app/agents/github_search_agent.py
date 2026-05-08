@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
+from app.core.progress import emit_progress
 from app.core.state import TaskState, RepoCandidate
 from app.tools.github_tool import (
     canonical_github_repo_url,
@@ -43,7 +44,10 @@ class GitHubSearchAgent:
 
         # 1. GitHub links found in paper text
         if state.reproduction_brief:
+            link_count = len(state.reproduction_brief.github_links_in_paper)
+            emit_progress("Search GitHub", "checking links from paper", detail=f"{link_count} link(s)")
             for url in state.reproduction_brief.github_links_in_paper[:5]:
+                emit_progress("Search GitHub", "resolving paper link", detail=url)
                 repo_urls = get_github_repo_urls_from_page(url, max_results=5)
                 reason = (
                     "Found GitHub link in paper"
@@ -92,6 +96,7 @@ class GitHubSearchAgent:
 
         # Boost score for repos whose name matches a keyword
         if keywords:
+            emit_progress("Search GitHub", "scoring keyword/name matches", detail=f"{len(candidates)} candidate(s)")
             keyword_lower = {kw.lower() for kw in keywords}
             for c in candidates:
                 if c.name and c.name.lower() in keyword_lower:
@@ -100,6 +105,7 @@ class GitHubSearchAgent:
 
         # Boost score for repos whose name appears in the paper title
         if title:
+            emit_progress("Search GitHub", "scoring title/name matches", detail=title)
             title_words = {w.lower() for w in title.replace(":", " ").replace("-", " ").split() if len(w) > 2}
             for c in candidates:
                 if c.name:
@@ -108,6 +114,7 @@ class GitHubSearchAgent:
                         c.score += 10
                         c.reasons.append("Repo name appears in paper title")
 
+        emit_progress("Search GitHub", "reranking repository candidates", detail=f"{len(candidates)} candidate(s)")
         self._llm_rerank_candidates(state, candidates)
 
         candidates.sort(key=lambda c: c.score, reverse=True)
@@ -116,9 +123,17 @@ class GitHubSearchAgent:
         if candidates:
             state.selected_repo = candidates[0]
             state.status = "repo_found"
+            emit_progress(
+                "Search GitHub",
+                "selected repository",
+                detail=f"{candidates[0].url} (score={candidates[0].score:.1f})",
+                selected_repo=candidates[0].url,
+                candidate_count=len(candidates),
+            )
         else:
             state.errors.append({"agent": "GitHubSearchAgent", "error": "No repo candidates found"})
             state.status = "failed"
+            emit_progress("Search GitHub", "no repository candidates found", level="error")
 
         return state
 
@@ -157,7 +172,10 @@ class GitHubSearchAgent:
         reason_prefix: str,
         base_score: float = 40.0,
     ) -> None:
-        for repo in search_github_repos(query, max_results=5):
+        emit_progress("Search GitHub", "searching GitHub", detail=query, query=query)
+        repos = search_github_repos(query, max_results=5)
+        added = 0
+        for repo in repos:
             url = repo["html_url"]
             normalized = normalize_github_repo_url(url)
             if normalized in seen_urls:
@@ -197,6 +215,15 @@ class GitHubSearchAgent:
                     reasons=reasons,
                 )
             )
+            added += 1
+        emit_progress(
+            "Search GitHub",
+            "GitHub search complete",
+            detail=f"{added} new candidate(s) from {query}",
+            query=query,
+            added_count=added,
+            result_count=len(repos),
+        )
 
     def _add_repo_url(
         self,
@@ -260,6 +287,13 @@ class GitHubSearchAgent:
                 reasons=reasons,
             )
         )
+        emit_progress(
+            "Search GitHub",
+            "added repository candidate",
+            detail=f"{owner}/{name} score={score:.1f}",
+            repo_url=canonical_github_repo_url(owner, name),
+            score=score,
+        )
 
     def _llm_rerank_candidates(self, state: TaskState, candidates: list[RepoCandidate]) -> None:
         if len(candidates) < 2:
@@ -283,6 +317,7 @@ class GitHubSearchAgent:
             purpose="repo_candidate_rerank",
         )
         if not result:
+            emit_progress("Search GitHub", "LLM rerank unavailable", level="warning")
             return
 
         selected_url = result.get("selected_url")
@@ -300,6 +335,7 @@ class GitHubSearchAgent:
             confidence = 0.0
 
         if confidence < 0.5:
+            emit_progress("Search GitHub", "LLM rerank confidence too low", level="warning", detail=f"{confidence:.2f}")
             return
 
         max_score = max(c.score for c in candidates)
@@ -308,6 +344,13 @@ class GitHubSearchAgent:
         selected.reasons.append(f"LLM rerank selected this repo: {reason[:200]}")
         if confidence >= 0.75:
             selected.confidence = "high"
+        emit_progress(
+            "Search GitHub",
+            "LLM rerank selected candidate",
+            detail=f"{selected.url} confidence={confidence:.2f}",
+            selected_repo=selected.url,
+            confidence=confidence,
+        )
 
     def _candidate_llm_context(self, candidate: RepoCandidate) -> dict:
         owner = candidate.owner
