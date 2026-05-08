@@ -1,8 +1,8 @@
 # Paper Reproduction Smoke Agent
 
-Automated pipeline that takes an academic paper (PDF), locates the corresponding code repository, builds the environment, runs a smoke test, attempts a lightweight end-to-end reproduction when safe, and produces a reproducibility report.
+Automated pipeline that takes an academic paper (PDF), locates the corresponding code repository, builds the environment, runs a smoke test, plans and executes task-family–aware benchmark reproduction, attempts a lightweight end-to-end reproduction when safe, and produces a reproducibility report.
 
-> **Scope:** This tool targets lightweight reproduction for simple papers: it can run bundled demos, inference examples, small evaluations, or tests when they do not require training, private files, or large datasets. It does **not** reproduce large-scale training or guarantee that paper metrics are numerically matched.
+> **Scope:** This tool targets lightweight reproduction for simple papers: it can run bundled demos, inference examples, small evaluations, or tests when they do not require training, private files, or large datasets. It also supports automated benchmark planning and execution for supported task families (local feature matching, zero-shot classification, ASR, and sequence labeling). It does **not** reproduce large-scale training or guarantee that paper metrics are numerically matched.
 
 ---
 
@@ -154,17 +154,18 @@ paper-smoke eval-goldset --gold-set examples/gold_set.json --backend none
 ```
 PDF Input ──> Paper Ingest ──> Paper Understanding ──> GitHub Search
                                                          │
-        Report <── Simple Reproduction <── Smoke Test <── Env Build <── Repo Evaluation
+Report <── Simple Reproduction <── Benchmark Reproduction <── Smoke Test <── Env Build <── Repo Evaluation
 ```
 
 1. **Paper Ingest** — Extract text and metadata from the PDF.
-2. **Paper Understanding** — LLM-based extraction of task, datasets, metrics, method keywords, and GitHub links.
+2. **Paper Understanding** — LLM-based extraction of task, datasets, metrics, method keywords, benchmark protocol, and GitHub links.
 3. **GitHub Search** — Search for matching repositories (skipped if `--repo` or `--repo-dir` is provided).
-4. **Repo Evaluation** — Clone the repo, scan structure, compute runnable score, detect risk flags.
+4. **Repo Evaluation** — Clone the repo, scan structure, compute runnable score, detect risk flags, and collect benchmark surface signals.
 5. **Environment Build** — Create an isolated environment (conda / virtualenv / Docker / none).
 6. **Smoke Test** — Execute a conservative entry-point command (`--help`, demo script, or pytest) to verify the environment and entry point.
-7. **Simple Reproduction** — When the repository appears suitable, run a non-`--help` lightweight demo / inference / evaluation command using bundled resources, and record outputs.
-8. **Report** — Generate a Markdown report with final status and actionable next steps.
+7. **Benchmark Reproduction** — Classify the paper's task family (local feature matching, zero-shot classification, ASR, sequence labeling), plan benchmark candidates via LLM review, select the highest feasible level (L0–L3), execute with automatic fallback, parse metrics, and compare against paper-reported reference values.
+8. **Simple Reproduction** — When the repository appears suitable, run a non-`--help` lightweight demo / inference / evaluation command using bundled resources, and record outputs.
+9. **Report** — Generate a Markdown report with final status, benchmark comparisons, and actionable next steps.
 
 ---
 
@@ -174,13 +175,16 @@ The `final_status` field in the report is the single most important output. Here
 
 | Status | Meaning |
 |---|---|
+| `benchmark_success` | The benchmark reproduction stage planned and executed a task-family benchmark, parsed metrics, and compared against paper-reported values. This is the strongest automated result. |
 | `reproduction_success` | A lightweight end-to-end reproduction command ran successfully. This is stronger than smoke success, but still not proof of full paper-metric parity. |
 | `success` | A non-trivial command (demo / pytest) ran and exited with code 0. The repo installs and its entry point works. |
 | `partial_success_help_only` | Only the `--help` flag succeeded. **This is NOT a full reproduction.** It means the package is importable and the CLI responds, but no actual inference or evaluation code was executed. |
 | `repo_found_but_env_failed` | The repository was found but the environment (conda/venv/Docker) could not be built — typically a dependency conflict or missing system library. |
 | `repo_found_but_smoke_failed` | The environment was built, but the smoke command failed (missing weights, data, wrong arguments, etc.). |
 | `repo_found_but_reproduction_failed` | The repository and environment were available, but the lightweight reproduction command failed. |
+| `repo_found_but_benchmark_failed` | The benchmark reproduction stage was attempted but the benchmark command failed. |
 | `repo_found_reproduction_not_run` | The repository was found, but no safe lightweight reproduction command was available. |
+| `repo_found_benchmark_not_run` | The repository was found, but no runnable benchmark plan could be generated (e.g. unsupported task family, no candidate scripts). |
 | `repo_found_smoke_not_run` | The repository was found and statically evaluated, but no code was executed (`--backend none`). |
 | `repo_not_found` | No suitable repository was found via GitHub search or paper links. |
 | `paper_parse_failed` | The PDF could not be parsed (corrupt file, scanned image, etc.). |
@@ -204,6 +208,30 @@ The simple reproduction stage is intentionally conservative. It may run commands
 
 This stage is meant to fully exercise simple repositories that ship their own sample inputs or tests. If a paper requires checkpoints, large datasets, or long CUDA training, the agent should report that limitation rather than pretending the paper was reproduced.
 
+### Benchmark Reproduction Framework
+
+The benchmark module (`app/benchmark/`) provides automated, task-family–aware benchmark planning and execution:
+
+1. **Task Family Classification** (`ontology.py`) — Classifies the paper into one of four supported families based on extracted keywords, datasets, and metrics:
+   - **Local Feature Matching** — AUC@5/10/20, matching score, FPS (e.g. SuperPoint, LoFTR)
+   - **Zero-Shot Classification** — Top-1/Top-5 accuracy (e.g. CLIP)
+   - **ASR (Automatic Speech Recognition)** — WER, CER, BLEU (e.g. Whisper)
+   - **Sequence Labeling** — F1, Precision, Recall (e.g. NER taggers)
+
+2. **Benchmark Planning** (`planner.py`, `llm_planner.py`) — Generates candidate benchmark plans at four levels:
+   - **L0** — Static analysis only (no execution)
+   - **L1** — Minimal command with synthetic/tiny data
+   - **L2** — Official evaluation script with small public dataset
+   - **L3** — Full paper protocol with standard benchmark dataset
+
+   Plans are reviewed by the LLM for feasibility and safety before execution.
+
+3. **Execution & Fallback** (`benchmark_reproduction_agent.py`) — Executes the highest feasible plan; on failure, automatically falls back to lower levels.
+
+4. **Metric Parsing & Comparison** (`parsers.py`, `comparator.py`) — Extracts metric values from stdout/stderr and compares against paper-reported reference values.
+
+5. **Adapters** (`adapters/`) — Each task family has a dedicated adapter that provides dataset metadata, metric specs, and plan templates.
+
 ---
 
 ## Project Structure
@@ -221,11 +249,30 @@ paperReproductAgent/
 │   │   ├── docker_build_agent.py
 │   │   ├── venv_build_agent.py
 │   │   ├── smoke_run_agent.py
+│   │   ├── benchmark_reproduction_agent.py
 │   │   ├── simple_reproduction_agent.py
+│   │   ├── input_resolver_agent.py
 │   │   └── report_writer_agent.py
+│   ├── benchmark/                # Task-family benchmark framework
+│   │   ├── adapters/             # Per-task-family adapters
+│   │   │   ├── asr.py            #   ASR (WER, CER, BLEU)
+│   │   │   ├── local_feature_matching.py  #   Feature matching (AUC, MScore)
+│   │   │   ├── sequence_labeling.py       #   NER / tagging (F1, Precision, Recall)
+│   │   │   ├── zero_shot_classification.py #   Zero-shot (Top-1, Top-5)
+│   │   │   ├── downloads.py      #   Dataset download helpers
+│   │   │   └── base.py           #   Adapter protocol
+│   │   ├── planner.py            # Benchmark plan generation (L0–L3)
+│   │   ├── llm_planner.py        # LLM-assisted plan review
+│   │   ├── comparator.py         # Metric comparison against reference
+│   │   ├── parsers.py            # Output metric extraction
+│   │   ├── dataset_registry.py   # Known dataset metadata
+│   │   ├── ontology.py           # Task family classification
+│   │   ├── schema.py             # Benchmark Pydantic models
+│   │   └── script_miner.py       # Script candidate mining
 │   ├── core/
 │   │   ├── config.py             # Settings (loaded from .env)
 │   │   ├── state.py              # Pydantic models for all pipeline data
+│   │   ├── naming.py             # Stable paper slug generation
 │   │   ├── paths.py              # Task directory layout
 │   │   ├── file_utils.py         # JSON / state persistence
 │   │   └── progress.py           # Progress event system
@@ -239,7 +286,11 @@ paperReproductAgent/
 │   │   └── smoke_report.md.j2    # Report Jinja2 template
 │   └── tui/                      # Textual-based terminal UI
 ├── examples/
-│   └── gold_set.json             # Benchmark gold set for eval-goldset
+│   ├── gold_set.json             # Original gold set for eval-goldset
+│   ├── gold_set_current_six.json # Current 6-paper gold set
+│   ├── gold_set_lightweight_generalization.json
+│   └── gold_set_lightweight_generalization_whisper.json
+├── tests/
 ├── .env.example                  # Environment variable template
 ├── pyproject.toml                # Project metadata and dependencies
 └── README.md
