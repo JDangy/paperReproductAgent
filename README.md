@@ -6,6 +6,65 @@ Automated pipeline that takes an academic paper (PDF), locates the corresponding
 
 ---
 
+## What This Agent Can and Cannot Do
+
+This agent is best understood as an automated **first-pass reproduction engineer**: it finds code, builds an environment, runs the safest feasible benchmark or example, parses evidence, and writes a report. It is not a full replacement for a researcher manually reproducing every table and ablation in a paper.
+
+### It can do
+
+- Parse a local PDF and extract metadata, task hints, datasets, metrics, method keywords, GitHub links, and benchmark protocol hints.
+- Search GitHub and project pages for likely official repositories, then rerank candidates using paper links, method-name signals, README/title evidence, repository metadata, and the input PDF filename when PDF title extraction is noisy.
+- Clone or copy a repository, inspect README/scripts/configs/sample files, detect risk flags, and compute a runnable score.
+- Build an isolated environment with `conda`, `venv`, or Docker; the `conda` backend can install requirements, install editable packages, relax brittle pins, and perform limited dependency repair.
+- Run conservative smoke tests to verify that the environment and entry point are usable.
+- Plan and run task-family-aware benchmarks for:
+  - local feature matching
+  - zero-shot classification
+  - ASR
+  - sequence labeling
+- Fall back from harder benchmark levels to lighter ones when a full protocol is unavailable or fails.
+- Run lightweight demos, inference examples, or README examples when they are safe and self-contained.
+- Prefer CUDA/GPU execution when the repository and dependencies support it.
+- Parse structured metrics such as AUC, matching score, FPS/latency, Top-1/Top-5 accuracy, WER/CER, entity tags, keypoints, descriptors, and matches.
+- Produce Markdown and JSON reports with final status, commands, logs, metrics, failure types, downgrade reasons, and next steps.
+
+### It cannot guarantee
+
+- Full training-from-scratch reproduction.
+- Full reproduction of every paper table, ablation, hyperparameter setting, or large-scale benchmark.
+- Access to private files, manually registered datasets, private model weights, or license-gated resources.
+- Successful builds for repositories that require old compilers, custom CUDA extensions, unavailable wheels, or undocumented system packages.
+- Strict numerical parity with paper results; it reports what it ran and compares available metrics, but it does not prove full equivalence.
+- Correct paper understanding from every PDF. PDF extraction can be noisy, so the agent uses evidence gates and fallback rules, but manual review is still recommended for high-stakes claims.
+- Safe execution of arbitrary research code without risk. Use Docker for stronger isolation, or `--backend none` for static analysis only.
+
+### Recent conda-mode validation
+
+The current six-paper gold set was run with `--backend conda` and GPU available. The pipeline parsed all papers, selected the correct top-1 repository for all six items, built task-local conda environments, and completed a benchmark for each item without crashing.
+
+| Paper | Selected repo | Final status | Achieved reproduction |
+|---|---|---|---|
+| SuperGlue | `magicleap/SuperGluePretrainedNetwork` | `benchmark_success` | L2 official bundled pair evaluation; parsed AUC@5/10/20, Prec, MScore |
+| LightGlue | `cvg/LightGlue` | `benchmark_success` | L2 CUDA speed benchmark; parsed FPS/latency variants |
+| CLIP | `OpenAI/CLIP` | `benchmark_success` | L3 CIFAR-100 zero-shot benchmark; parsed Top-1/Top-5 accuracy |
+| XFeat | `verlab/accelerated_features` | `benchmark_success` | L1 minimal local-feature example; parsed keypoints, descriptors, matches |
+| Whisper | `openai/whisper` | `benchmark_success` | L3 LibriSpeech ASR benchmark; parsed WER/CER |
+| Flair | `zalandoresearch/flair` | `benchmark_success` | L1 pretrained NER sample inference; parsed entities and tags |
+
+Summary from that run:
+
+```text
+Paper parse success: 6/6
+Correct repo (top 1): 6/6
+Expected repo in top 5: 6/6
+Pipeline crashed: 0/6
+Backend: conda
+```
+
+These results demonstrate autonomous lightweight/benchmark reproduction, not full paper reimplementation or training-level reproduction.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -177,6 +236,7 @@ The `final_status` field in the report is the single most important output. Here
 |---|---|
 | `benchmark_success` | The benchmark reproduction stage planned and executed a task-family benchmark, parsed metrics, and compared against paper-reported values. This is the strongest automated result. |
 | `reproduction_success` | A lightweight end-to-end reproduction command ran successfully. This is stronger than smoke success, but still not proof of full paper-metric parity. |
+| `reproduction_success_benchmark_failed` | A lightweight reproduction command succeeded, but the stronger benchmark attempt failed. Treat the lightweight run as valid evidence and inspect the benchmark logs separately. |
 | `success` | A non-trivial command (demo / pytest) ran and exited with code 0. The repo installs and its entry point works. |
 | `partial_success_help_only` | Only the `--help` flag succeeded. **This is NOT a full reproduction.** It means the package is importable and the CLI responds, but no actual inference or evaluation code was executed. |
 | `repo_found_but_env_failed` | The repository was found but the environment (conda/venv/Docker) could not be built — typically a dependency conflict or missing system library. |
@@ -218,17 +278,17 @@ The benchmark module (`app/benchmark/`) provides automated, task-family–aware 
    - **ASR (Automatic Speech Recognition)** — WER, CER, BLEU (e.g. Whisper)
    - **Sequence Labeling** — F1, Precision, Recall (e.g. NER taggers)
 
-2. **Benchmark Planning** (`planner.py`, `llm_planner.py`) — Generates candidate benchmark plans at four levels:
+2. **Benchmark Planning** (`planner.py`, `llm_planner.py`, `generic_planner.py`) — Generates candidate benchmark plans at four levels:
    - **L0** — Static analysis only (no execution)
    - **L1** — Minimal command with synthetic/tiny data
    - **L2** — Official evaluation script with small public dataset
    - **L3** — Full paper protocol with standard benchmark dataset
 
-   Plans are reviewed by the LLM for feasibility and safety before execution.
+   Specialist adapters are evidence-gated to avoid routing noisy PDF extractions to the wrong benchmark family. Unknown task families can fall back to a generic LLM planner plus repository affordance scanning and plan validation.
 
 3. **Execution & Fallback** (`benchmark_reproduction_agent.py`) — Executes the highest feasible plan; on failure, automatically falls back to lower levels.
 
-4. **Metric Parsing & Comparison** (`parsers.py`, `comparator.py`) — Extracts metric values from stdout/stderr and compares against paper-reported reference values.
+4. **Metric Parsing & Comparison** (`parsers.py`, `generic_metric_parser.py`, `comparator.py`) — Extracts metric values from stdout/stderr and compares against paper-reported reference values.
 
 5. **Adapters** (`adapters/`) — Each task family has a dedicated adapter that provides dataset metadata, metric specs, and plan templates.
 
@@ -265,6 +325,10 @@ paperReproductAgent/
 │   │   ├── llm_planner.py        # LLM-assisted plan review
 │   │   ├── comparator.py         # Metric comparison against reference
 │   │   ├── parsers.py            # Output metric extraction
+│   │   ├── generic_metric_parser.py # LLM fallback metric parser for generic tasks
+│   │   ├── generic_planner.py    # Generic benchmark planner for unknown task families
+│   │   ├── plan_validator.py     # Safety/feasibility validation for generated plans
+│   │   ├── repo_affordance_scanner.py # Repo scripts/configs/samples/dataset signal scanner
 │   │   ├── dataset_registry.py   # Known dataset metadata
 │   │   ├── ontology.py           # Task family classification
 │   │   ├── schema.py             # Benchmark Pydantic models
