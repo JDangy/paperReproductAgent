@@ -6,6 +6,19 @@ Automated pipeline: PDF → find repo → build env → smoke test → benchmark
 
 Languages: Python 3.8+, TypeScript (docs site only). Package manager: **Poetry**.
 
+## Development workflow (MANDATORY)
+
+After EVERY code change, you MUST:
+
+1. **Rebuild if needed** — if dependencies changed, reinstall:
+   ```bash
+   F:\Anaconda\envs\paper_smoke\python.exe -m pip install -e . --no-deps
+   ```
+2. **Commit** with a concise message describing the fix/feature.
+3. **Push** to `git@github.com:Winter-And-You-Gone/paperReproductAgent.git` (SSH).
+
+No exceptions. Never leave changes uncommitted or unpushed.
+
 ## Essential commands
 
 ```bash
