@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import shutil
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from app.agents.docker_build_agent import classify_build_failure
-from app.agents.venv_build_agent import relax_requirement_line
+from app.agents.venv_build_agent import relax_requirement_line, pin_requirement_line
 from app.core.file_utils import save_json
 from app.core.naming import stable_paper_slug
 from app.core.progress import emit_progress
@@ -43,7 +44,7 @@ class CondaBuildAgent:
         conda_env_dir = Path(state.workspace_dir).resolve() / "envs" / paper_slug
         build_log_path = env_dir / "conda_build.log"
         repo_dir = Path(state.repo_evaluation.repo_dir).resolve()
-        python_bin = conda_env_dir / "bin" / "python"
+        python_bin = conda_env_dir / ("python.exe" if sys.platform == "win32" else "bin/python")
 
         result = EnvironmentBuildResult(
             environment_path=str(conda_env_dir),
@@ -180,6 +181,25 @@ class CondaBuildAgent:
         log_parts: list[str],
         step_name: str,
     ) -> None:
+        # 1) Try with pinned versions (>= → ==, > → bumped)
+        pinned_path = env_dir / f"{requirements_path.stem}_conda_pinned.txt"
+        original_lines = requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        pinned_lines = [pin_requirement_line(line) for line in original_lines]
+        if pinned_lines != original_lines:
+            pinned_path.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
+            log_parts.append(f"Pinning versions: {requirements_path.name} → {pinned_path.name}")
+            emit_progress("Build conda env", "installing with pinned versions", detail=requirements_path.name)
+            installed = self._try_run_step(
+                [*pip_cmd, "install", "-r", str(pinned_path)],
+                cwd=repo_dir,
+                deadline=deadline,
+                log_parts=log_parts,
+                step_name=f"install pinned {requirements_path.name}",
+            )
+            if installed:
+                return
+
+        # 2) Try with original requirements
         installed = self._try_run_step(
             [*pip_cmd, "install", "-r", str(requirements_path)],
             cwd=repo_dir,
@@ -190,16 +210,19 @@ class CondaBuildAgent:
         if installed:
             return
 
+        # 3) Fall back to relaxed (strip version pins), but cap numpy <2 for API compat
         emit_progress("Build conda env", "retrying relaxed requirements", level="warning", detail=requirements_path.name)
+
         relaxed_path = env_dir / f"{requirements_path.stem}_conda_relaxed.txt"
-        relaxed_path.write_text(
-            "\n".join(
-                relax_requirement_line(line)
-                for line in requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        relaxed_lines: list[str] = []
+        for line in original_lines:
+            relaxed = relax_requirement_line(line)
+            # Cap numpy <2 to avoid np.trapz removal in numpy 2.x
+            pkg = re.sub(r"\[.*?\]", "", relaxed.strip().lower())
+            if pkg == "numpy":
+                relaxed = "numpy<2"
+            relaxed_lines.append(relaxed)
+        relaxed_path.write_text("\n".join(relaxed_lines) + "\n", encoding="utf-8")
         self._run_step(
             [*pip_cmd, "install", "-r", str(relaxed_path)],
             cwd=repo_dir,

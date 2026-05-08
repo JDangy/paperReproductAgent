@@ -453,7 +453,8 @@ runpy.run_path(str(script), run_name="__main__")
             return state.env_build.python_executable
         if not state.env_build.environment_path:
             return None
-        return str(Path(state.env_build.environment_path) / "bin" / "python")
+        import sys as _sys
+        return str(Path(state.env_build.environment_path) / ("python.exe" if _sys.platform == "win32" else "bin/python"))
 
     def _venv_pip_target_args(self, state: TaskState) -> list[str]:
         if not state.env_build or not state.env_build.python_paths:

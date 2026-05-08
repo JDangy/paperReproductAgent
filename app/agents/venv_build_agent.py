@@ -47,7 +47,7 @@ class VenvBuildAgent:
 
         result = EnvironmentBuildResult(
             environment_path=str(venv_dir),
-            python_executable=str(venv_dir / "bin" / "python"),
+            python_executable=str(venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")),
             build_log_path=str(build_log_path),
         )
 
@@ -65,7 +65,7 @@ class VenvBuildAgent:
             )
 
             if venv_created:
-                python_bin = venv_dir / "bin" / "python"
+                python_bin = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
                 pip_cmd = [str(python_bin), "-m", "pip"]
                 pip_prefix: list[str] = []
                 result.environment_path = str(venv_dir)
@@ -320,6 +320,58 @@ def relax_requirement_line(line: str) -> str:
     without_marker = stripped.split(";", 1)[0].strip()
     without_extras = re.sub(r"\[.*?\]", "", without_marker)
     return re.split(r"\s*(?:==|>=|<=|~=|!=|>|<|===)\s*", without_extras, maxsplit=1)[0].strip()
+
+
+def pin_requirement_line(line: str) -> str:
+    """Pin loose version constraints to the minimum compatible version.
+
+    ``>=X.Y.Z`` → ``==X.Y.Z`` (pin to lower bound).
+    ``>X.Y.Z``  → ``==X.Y.Z+1`` (bump the least-significant component by 1).
+    ``<=`` / ``==`` / ``~=`` / ``!=`` → keep as-is.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return line
+    if stripped.startswith(("-", "git+", "http://", "https://")):
+        return line
+
+    # Preserve trailing markers and comments
+    marker = ""
+    if ";" in stripped:
+        stripped, marker = stripped.split(";", 1)
+        stripped, marker = stripped.strip(), " ; " + marker.strip()
+
+    match = re.match(r"^(.+?)\s*(>=|>|<=|==|~=|!=|<)\s*(.+)$", stripped)
+    if not match:
+        return line
+
+    pkg_part, op, ver = match.group(1), match.group(2), match.group(3).strip()
+
+    if op == ">=":
+        return f"{pkg_part}=={ver}{marker}"
+    elif op == ">":
+        pinned = _bump_version(ver)
+        if pinned is None:
+            return line
+        return f"{pkg_part}=={pinned}{marker}"
+    else:
+        return line
+
+
+def _bump_version(ver: str) -> str | None:
+    """Bump the least-significant numeric component of a version by 1.
+
+    ``1.18.1`` → ``1.18.2``, ``1.18`` → ``1.19``, ``1`` → ``2``.
+    Returns None if the version cannot be parsed.
+    """
+    parts = ver.split(".")
+    for i in range(len(parts) - 1, -1, -1):
+        m = re.match(r"^(\d+)(.*)$", parts[i])
+        if m:
+            num, suffix = int(m.group(1)), m.group(2)
+            parts[i] = str(num + 1) + suffix
+            return ".".join(parts)
+    return None
 
 
 def _local_project_names(repo_dir: Path) -> set[str]:
