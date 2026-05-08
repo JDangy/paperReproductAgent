@@ -1,18 +1,33 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 BenchmarkLevel = Literal["L0", "L1", "L2", "L3"]
-TaskFamily = Literal[
+
+# Open string type — specialist families are enumerated in KNOWN_TASK_FAMILIES
+# but any string value is accepted for extensibility.
+TaskFamily = str
+
+KNOWN_TASK_FAMILIES: frozenset[str] = frozenset({
     "local_feature_matching",
     "zero_shot_classification",
     "asr",
     "sequence_labeling",
-    "unknown",
-]
+})
+
+
+class TaskOntology(BaseModel):
+    """Rich taxonomy information for a benchmark task."""
+    family: str
+    domain: Optional[str] = None         # "cv" | "nlp" | "audio" | "multimodal" | "rl" | "other"
+    input_modalities: List[str] = Field(default_factory=list)    # ["image", "text", "audio", ...]
+    output_modalities: List[str] = Field(default_factory=list)   # ["class_label", "bounding_boxes", ...]
+    metric_types: List[str] = Field(default_factory=list)        # ["accuracy", "error_rate", "f1", ...]
+    confidence: float = 0.0
+    is_known_family: bool = False
 
 
 class ExecutionBudget(BaseModel):

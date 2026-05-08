@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from app.core.progress import emit_progress
 from app.core.state import TaskState, RepoCandidate
@@ -41,6 +42,7 @@ class GitHubSearchAgent:
 
         title = state.paper_metadata.title if state.paper_metadata else None
         arxiv_id = state.paper_metadata.arxiv_id if state.paper_metadata else None
+        name_signals = [signal for signal in [title, _input_name_signal(state.input_value)] if signal]
 
         # 1. GitHub links found in paper text
         if state.reproduction_brief:
@@ -102,17 +104,28 @@ class GitHubSearchAgent:
                 if c.name and c.name.lower() in keyword_lower:
                     c.score += 15
                     c.reasons.append("Repo name matches method keyword")
+                if c.name and _name_contains_any_signal(c.name, keywords):
+                    c.score += 8
+                    c.reasons.append("Repo name contains method keyword")
 
-        # Boost score for repos whose name appears in the paper title
-        if title:
-            emit_progress("Search GitHub", "scoring title/name matches", detail=title)
-            title_words = {w.lower() for w in title.replace(":", " ").replace("-", " ").split() if len(w) > 2}
+        # Boost score for repos whose name appears in the paper title or input filename.
+        # PDF text extraction can mistake a body line for the title; local filenames
+        # such as lightglue.pdf are often a cleaner method-name signal.
+        if name_signals:
+            emit_progress("Search GitHub", "scoring title/name matches", detail="; ".join(name_signals))
+            title_words = (
+                {w.lower() for w in title.replace(":", " ").replace("-", " ").split() if len(w) > 2}
+                if title else set()
+            )
             for c in candidates:
                 if c.name:
                     name_words = c.name.lower().replace("-", " ").split()
-                    if any(nw in title_words for nw in name_words):
+                    if title and any(nw in title_words for nw in name_words):
                         c.score += 10
                         c.reasons.append("Repo name appears in paper title")
+                    if _name_contains_any_signal(c.name, name_signals):
+                        c.score += 20
+                        c.reasons.append("Repo name contains paper/input method token")
 
         emit_progress("Search GitHub", "reranking repository candidates", detail=f"{len(candidates)} candidate(s)")
         self._llm_rerank_candidates(state, candidates)
@@ -383,3 +396,41 @@ class GitHubSearchAgent:
             if normalize_github_repo_url(candidate.url) == selected_normalized:
                 return candidate
         return None
+
+
+def _name_contains_any_signal(repo_name: str, signals: list[str]) -> bool:
+    repo_compact = _compact_signal(repo_name)
+    if not repo_compact:
+        return False
+    for signal in signals:
+        for token in _signal_tokens(signal):
+            if len(token) >= 4 and token in repo_compact:
+                return True
+    return False
+
+
+def _input_name_signal(input_value: str | None) -> str | None:
+    if not input_value:
+        return None
+    raw = input_value.strip()
+    if raw.startswith("@"):
+        raw = raw[1:]
+    path = Path(raw)
+    stem = path.stem
+    if stem and stem.lower() not in {"paper", "main", "download"}:
+        return stem
+    return None
+
+
+def _signal_tokens(text: str) -> list[str]:
+    import re
+
+    cleaned = re.sub(r"-\s+", "", text)
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9]{3,}", cleaned)
+    return [_compact_signal(token) for token in tokens]
+
+
+def _compact_signal(text: str) -> str:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "", text.lower())

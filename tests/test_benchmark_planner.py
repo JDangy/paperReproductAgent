@@ -57,6 +57,27 @@ def test_planner_selects_local_feature_matching_l2_without_repo_name(tmp_path):
     assert selected.command[:3] == ["python", "match_pairs.py", "--eval"]
 
 
+def test_planner_does_not_route_noisy_superglue_brief_to_asr(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "README.md").write_text("# Simple Demo Repo\n\nRun python demo.py --help\n", encoding="utf-8")
+    (repo_dir / "demo.py").write_text("print('Demo OK')\n", encoding="utf-8")
+    state = _state(
+        tmp_path,
+        repo_dir,
+        task="segmentation",
+        datasets=["GLUE"],
+        metrics=["AUC", "IoU", "WER", "accuracy"],
+        keywords=["Super-\nGlue", "Super-\nPoint", "Graph Neural Network"],
+        scripts=["demo.py"],
+    )
+
+    specs = plan_benchmarks(state)
+
+    assert specs
+    assert {spec.task_family for spec in specs} == {"local_feature_matching"}
+
+
 def test_local_feature_paper_protocol_estimates_known_dataset_sizes(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()

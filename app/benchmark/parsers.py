@@ -22,6 +22,15 @@ def parse_metrics(spec: BenchmarkSpec, stdout: str, stderr: str, repo_dir: Path,
             return _augment_json_metrics(spec, _load_json(repo_dir / rel_path))
     if parser_type == "generic_metrics":
         return parse_generic_metrics(stdout + "\n" + stderr)
+    if parser_type == "llm_fallback":
+        from app.benchmark.generic_metric_parser import parse_with_llm_fallback
+        return parse_with_llm_fallback(spec, stdout, stderr, repo_dir, run_dir)
+    # Fallback for unknown task families: try generic regex first
+    from app.benchmark.schema import KNOWN_TASK_FAMILIES
+    if spec.task_family not in KNOWN_TASK_FAMILIES:
+        result = parse_generic_metrics(stdout + "\n" + stderr)
+        if result:
+            return result
     return {}
 
 
@@ -74,6 +83,9 @@ def parse_generic_metrics(text: str) -> dict[str, Any]:
         "CER": r"\bCER\b\s*[:=]\s*([0-9.]+)",
         "F1": r"\bF1\b\s*[:=]\s*([0-9.]+)",
         "Accuracy": r"\b(?:accuracy|acc)\b\s*[:=]\s*([0-9.]+)",
+        "mAP": r"\bmAP\b\s*[:=]\s*([0-9.]+)",
+        "AP50": r"\bAP50\b\s*[:=]\s*([0-9.]+)",
+        "mIoU": r"\bmIoU\b\s*[:=]\s*([0-9.]+)",
         "FPS": r"\bFPS\b\s*[:=]\s*([0-9.]+)",
     }
     for key, pattern in patterns.items():

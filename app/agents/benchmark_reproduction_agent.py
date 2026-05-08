@@ -11,7 +11,7 @@ from app.benchmark.comparator import compare_metrics, protocol_match
 from app.benchmark.llm_planner import apply_llm_review, llm_review_benchmark_plan
 from app.benchmark.parsers import parse_metrics
 from app.benchmark.planner import LEVEL_RANK, downgrade_reasons, plan_benchmarks, select_best_benchmark
-from app.benchmark.schema import BenchmarkRunResult, BenchmarkSpec, ExecutionBudget
+from app.benchmark.schema import BenchmarkRunResult, BenchmarkSpec, ExecutionBudget, KNOWN_TASK_FAMILIES
 from app.core.file_utils import save_json
 from app.core.progress import emit_progress
 from app.core.state import TaskState
@@ -187,6 +187,9 @@ class BenchmarkReproductionAgent:
                 exit_code=proc.returncode,
             )
             result.metrics = parse_metrics(selected, proc.stdout, proc.stderr, repo_dir, run_dir)
+            if not result.metrics and selected.task_family not in KNOWN_TASK_FAMILIES:
+                from app.benchmark.generic_metric_parser import parse_with_llm_fallback
+                result.metrics = parse_with_llm_fallback(selected, proc.stdout, proc.stderr, repo_dir, run_dir)
             result.reference_results = selected.reference
             result.comparisons = compare_metrics(selected, result.metrics)
             result.protocol_match = protocol_match(selected)

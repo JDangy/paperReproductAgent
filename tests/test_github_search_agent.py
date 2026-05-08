@@ -92,6 +92,65 @@ def test_project_page_link_is_resolved_before_search(monkeypatch):
     assert result.selected_repo.source == "paper"
 
 
+def test_title_method_token_breaks_ties_between_paper_github_links(monkeypatch):
+    state = _state()
+    state.paper_metadata.title = "SuperGlue: Learning Feature Matching with Graph Neural Networks"
+    state.reproduction_brief.method_keywords = ["Super-\nGlue", "Super-\nPoint"]
+    state.reproduction_brief.github_links_in_paper = [
+        "https://github.com/magicleap/SuperPointPretrainedNetwork",
+        "https://github.com/magicleap/SuperGluePretrainedNetwork.1.Introduction",
+    ]
+
+    monkeypatch.setattr(
+        github_search_agent,
+        "get_github_repo_urls_from_page",
+        lambda url, max_results=5: [url],
+    )
+    monkeypatch.setattr(github_search_agent, "get_repo_info", lambda owner, name: {
+        "stargazers_count": 0,
+        "archived": False,
+        "fork": False,
+    })
+    monkeypatch.setattr(github_search_agent, "get_repo_readme", lambda owner, name: "")
+    monkeypatch.setattr(github_search_agent, "search_github_repos", lambda query, max_results=5: [])
+    monkeypatch.setattr(github_search_agent, "call_llm_json", lambda **kwargs: None)
+
+    result = GitHubSearchAgent().run(state)
+
+    assert result.selected_repo.url == "https://github.com/magicleap/SuperGluePretrainedNetwork"
+    assert any("paper/input method token" in r for r in result.selected_repo.reasons)
+
+
+def test_input_filename_breaks_ties_when_pdf_title_is_noisy(monkeypatch):
+    state = _state()
+    state.input_value = "examples/gold_papers/lightglue.pdf"
+    state.paper_metadata.title = "multiple design decisions of SuperGlue, the state of the art"
+    state.reproduction_brief.method_keywords = ["Lei Zhou", "Jiri Matas"]
+    state.reproduction_brief.github_links_in_paper = [
+        "https://github.com/lucidrains/bidirectional-cross-attention.4",
+        "https://github.com/cvg/LightGlue.1.Introduction",
+    ]
+
+    monkeypatch.setattr(
+        github_search_agent,
+        "get_github_repo_urls_from_page",
+        lambda url, max_results=5: [url],
+    )
+    monkeypatch.setattr(github_search_agent, "get_repo_info", lambda owner, name: {
+        "stargazers_count": 0,
+        "archived": False,
+        "fork": False,
+    })
+    monkeypatch.setattr(github_search_agent, "get_repo_readme", lambda owner, name: "")
+    monkeypatch.setattr(github_search_agent, "search_github_repos", lambda query, max_results=5: [])
+    monkeypatch.setattr(github_search_agent, "call_llm_json", lambda **kwargs: None)
+
+    result = GitHubSearchAgent().run(state)
+
+    assert result.selected_repo.url == "https://github.com/cvg/LightGlue"
+    assert any("paper/input method token" in r for r in result.selected_repo.reasons)
+
+
 def test_bare_project_page_link_is_resolved_before_search(monkeypatch):
     state = _state()
     state.reproduction_brief.github_links_in_paper = ["www.verlab.dcc.ufmg.br/descriptors/xfeat_cvpr24"]

@@ -325,6 +325,8 @@ class SimpleReproductionAgent:
                 continue
             if name in {"app.py", "online_demo.py"} or stem.startswith(("gradio", "server")):
                 continue
+            if _script_defaults_to_interactive_camera(repo_dir / script):
+                continue
             if any(token in stem for token in ("demo", "infer", "inference", "predict", "eval", "evaluate", "benchmark", "example")):
                 kind = "evaluation" if any(token in stem for token in ("eval", "evaluate", "benchmark")) else "demo"
                 candidates.append({
@@ -387,6 +389,27 @@ def _script_looks_lightweight(script: str) -> bool:
     return any(token in stem for token in ("demo", "infer", "inference", "predict", "eval", "evaluate", "benchmark", "example"))
 
 
+def _script_defaults_to_interactive_camera(path: Path) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")[:12000].lower()
+    except OSError:
+        return False
+
+    camera_terms = ("webcam", "usb camera", "ip camera", "videostreamer", "cv2.videocapture")
+    default_camera_terms = (
+        "default='0'",
+        'default="0"',
+        "default = '0'",
+        'default = "0"',
+        "default=0",
+        "default = 0",
+    )
+    has_camera_default = "--input" in text and any(term in text for term in default_camera_terms)
+    return has_camera_default and any(term in text for term in camera_terms)
+
+
 def _extract_python_code_blocks(readme: str) -> list[str]:
     blocks: list[str] = []
     pattern = re.compile(r"```(?:python|py)\s*\n(.*?)```", re.IGNORECASE | re.DOTALL)
@@ -416,7 +439,7 @@ def _sanitize_readme_example_block(block: str, repo_dir: Path) -> str | None:
         if not stripped or stripped.startswith("#"):
             sanitized_lines.append(line)
             continue
-        if stripped.startswith(("!", "%")):
+        if stripped.startswith(("!", "%", ">>>", "...")):
             return None
         if any(term in stripped.lower() for term in ("pip install", "conda install", "apt install")):
             return None

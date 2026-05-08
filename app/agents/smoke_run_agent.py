@@ -72,6 +72,22 @@ def classify_smoke_failure(stderr: str, stdout: str) -> tuple:
         evidence = match_lines[0].strip() if match_lines else None
         return "runtime_linker_error", evidence
 
+    camera_markers = [
+        "could not read camera",
+        "can't open camera",
+        "cannot open camera",
+        "camera index out of range",
+        "webcam",
+        "videoio",
+    ]
+    if any(marker in text for marker in camera_markers):
+        match_lines = [
+            l for l in (stderr + stdout).splitlines()
+            if any(marker in l.lower() for marker in camera_markers)
+        ]
+        evidence = match_lines[0].strip() if match_lines else None
+        return "missing_input_device", evidence
+
     cuda_markers = [
         "cuda",
         "cudnn",

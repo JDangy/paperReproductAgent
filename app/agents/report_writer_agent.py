@@ -215,11 +215,21 @@ class ReportWriterAgent:
 
         if state.benchmark_run:
             if state.benchmark_run.success:
-                return "benchmark_success"
+                if state.benchmark_run.metrics or state.benchmark_run.comparisons:
+                    return "benchmark_success"
+                if state.reproduction_run and state.reproduction_run.success:
+                    return "reproduction_success"
+                if state.smoke_run and state.smoke_run.success:
+                    if state.smoke_run.command and state.smoke_run.command.kind == "help":
+                        return "partial_success_help_only"
+                    return "success"
+                return "success"
             if state.benchmark_run.skipped:
                 if not state.reproduction_run:
                     return "repo_found_benchmark_not_run"
             else:
+                if state.reproduction_run and state.reproduction_run.success:
+                    return "reproduction_success_benchmark_failed"
                 return "repo_found_but_benchmark_failed"
 
         if state.reproduction_run:
@@ -252,6 +262,7 @@ class ReportWriterAgent:
     def _short_conclusion(self, status: str) -> str:
         mapping = {
             "reproduction_success": "已完成轻量端到端复现：仓库、环境和非 help 复现命令均执行成功。",
+            "reproduction_success_benchmark_failed": "已完成轻量端到端复现，但协议化 benchmark 命令执行失败；复现成功和 benchmark 失败需要分开看待。",
             "benchmark_success": "已完成协议化 benchmark 复现，并生成结构化指标、参考结果和降级说明。",
             "success": "仓库已找到，Smoke 测试命令执行成功。",
             "partial_success_help_only": "--help 命令运行正常。这是一个部分成功的 Smoke 测试，并非完整复现。",
@@ -282,6 +293,13 @@ class ReportWriterAgent:
                 "查看 runs/reproduction_001/stdout.log、stderr.log 和输出文件列表确认复现产物。",
                 "将轻量复现输出与论文或 README 中的示例结果进行人工比对。",
                 "如果需要更强证据，再扩展到小规模真实数据或官方权重。",
+            ]
+
+        if status == "reproduction_success_benchmark_failed":
+            return [
+                "查看 runs/reproduction_001/stdout.log 确认轻量复现输出，这是当前已经跑通的部分。",
+                "查看 runs/benchmark_001/benchmark_candidates.json 和 stderr.log，确认 benchmark planner 是否选择了正确任务族。",
+                "如果 benchmark 失败来自缺依赖或缺数据，先补齐官方小数据集、权重或可选依赖后重跑 benchmark。",
             ]
 
         if status == "success":

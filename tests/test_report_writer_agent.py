@@ -1,10 +1,12 @@
 from app.agents import report_writer_agent
 from app.agents.report_writer_agent import ReportWriterAgent
 from app.core.state import (
+    BenchmarkRunResult,
     EnvironmentBuildResult,
     PaperMetadata,
     RepoCandidate,
     RepoEvaluation,
+    ReproductionRunResult,
     SmokeRunResult,
     TaskState,
 )
@@ -49,6 +51,31 @@ def test_report_status_prioritizes_failed_isolated_env_build(tmp_path):
     status = ReportWriterAgent()._determine_final_status(state)
 
     assert status == "repo_found_but_env_failed"
+
+
+def test_report_status_preserves_reproduction_success_when_benchmark_fails(tmp_path):
+    state = _base_state(tmp_path)
+    state.benchmark_run = BenchmarkRunResult(
+        eligible=True,
+        success=False,
+        skipped=False,
+        failure_type="missing_dependency",
+    )
+    state.reproduction_run = ReproductionRunResult(success=True, skipped=False)
+
+    status = ReportWriterAgent()._determine_final_status(state)
+
+    assert status == "reproduction_success_benchmark_failed"
+
+
+def test_report_status_does_not_call_metricless_benchmark_success(tmp_path):
+    state = _base_state(tmp_path)
+    state.benchmark_run = BenchmarkRunResult(eligible=True, success=True, skipped=False)
+    state.reproduction_run = ReproductionRunResult(success=True, skipped=False)
+
+    status = ReportWriterAgent()._determine_final_status(state)
+
+    assert status == "reproduction_success"
 
 
 def test_report_llm_prompt_requires_chinese(tmp_path, monkeypatch):

@@ -34,6 +34,16 @@ def test_pt_file_not_found_is_missing_checkpoint():
     assert "mobile_sam.pt" in evidence
 
 
+def test_camera_failure_is_not_cuda_error_even_when_stdout_mentions_cuda():
+    stdout = 'Running inference on device "cuda"\nLoaded model\n'
+    stderr = "OSError: Could not read camera\n"
+
+    failure_type, evidence = classify_smoke_failure(stderr, stdout)
+
+    assert failure_type == "missing_input_device"
+    assert "camera" in evidence.lower()
+
+
 def test_argparse_sort_prefers_scripts_over_app_ui():
     scripts = ["app/app.py", "scripts/amg.py", "scripts/export_onnx_model.py"]
 

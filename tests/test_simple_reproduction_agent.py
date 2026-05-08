@@ -56,6 +56,22 @@ def test_simple_reproduction_runs_selected_command(tmp_path, monkeypatch):
     assert "demo ok" in (tmp_path / "task_test" / "runs" / "reproduction_001" / "stdout.log").read_text(encoding="utf-8")
 
 
+def test_simple_reproduction_skips_default_webcam_demo_candidate(tmp_path):
+    state = _state(tmp_path)
+    repo_dir = tmp_path / "repo"
+    (repo_dir / "demo.py").write_text(
+        "import argparse\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--input', default='0', help='ID of a USB webcam')\n"
+        "print('webcam demo')\n",
+        encoding="utf-8",
+    )
+
+    candidates = SimpleReproductionAgent(timeout_minutes=1)._heuristic_candidates(state)
+
+    assert candidates == []
+
+
 def test_simple_reproduction_skips_when_env_failed(tmp_path):
     state = _state(tmp_path, backend="conda")
     state.env_build.build_success = False
@@ -124,3 +140,14 @@ print(result["text"])
     assert "imageio_ffmpeg" in script
     assert '.paper_smoke_bin' in script
     assert "PAPER_SMOKE_README_EXAMPLE_OK" in script
+
+
+def test_readme_python_example_rejects_doctest_transcript(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    block = """
+>>> import numpy as np
+>>> np.load('result.npz')
+"""
+
+    assert _sanitize_readme_example_block(block, repo_dir) is None
