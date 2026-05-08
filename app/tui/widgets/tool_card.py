@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Tool call card widget - collapsible display for pipeline stages."""
+"""Enhanced tool call card — collapsible display for pipeline stages."""
 
 from textual.app import ComposeResult
 from textual.message import Message
@@ -11,7 +11,11 @@ from .. import theme as T
 
 
 class ToolCard(Widget):
-    """A collapsible card showing a tool/pipeline stage call."""
+    """A collapsible card showing a pipeline stage call.
+
+    Supports: queued, running, success, failed, skipped.
+    Auto-collapses success cards; auto-expands failed ones.
+    """
 
     DEFAULT_CSS = """
     ToolCard {
@@ -20,6 +24,7 @@ class ToolCard(Widget):
     }
     ToolCard .tool-header {
         color: $text;
+        height: 1;
     }
     ToolCard .tool-body {
         color: $text-muted;
@@ -39,6 +44,7 @@ class ToolCard(Widget):
         message: str = "",
         detail: str | None = None,
         duration: float | None = None,
+        attempts: int = 1,
         **kwargs: object,
     ) -> None:
         super().__init__(**kwargs)
@@ -47,6 +53,7 @@ class ToolCard(Widget):
         self._message = message
         self._detail = detail or ""
         self._duration = duration
+        self._attempts = attempts
 
     @property
     def status(self) -> str:
@@ -58,6 +65,7 @@ class ToolCard(Widget):
         message: str | None = None,
         detail: str | None = None,
         duration: float | None = None,
+        attempts: int | None = None,
     ) -> None:
         if status is not None:
             self._status = status
@@ -67,6 +75,8 @@ class ToolCard(Widget):
             self._detail = detail
         if duration is not None:
             self._duration = duration
+        if attempts is not None:
+            self._attempts = attempts
         self._refresh_display()
 
     def _format_duration(self) -> str:
@@ -75,23 +85,40 @@ class ToolCard(Widget):
         if self._duration >= 60:
             mins = int(self._duration // 60)
             secs = self._duration % 60
-            return f"  {mins}m{secs:.0f}s"
-        return f"  {self._duration:.1f}s"
+            return f"{mins}m{secs:.0f}s"
+        return f"{self._duration:.1f}s"
+
+    def _status_label(self) -> str:
+        labels: dict[str, str] = {
+            "queued": "queued",
+            "running": "running",
+            "success": "success",
+            "failed": "failed",
+            "skipped": "skipped",
+            "cancelled": "cancelled",
+        }
+        return labels.get(self._status, self._status)
 
     def _refresh_display(self) -> None:
-        icon = {"running": "▸", "success": "✓", "failed": "✗"}.get(self._status, "▸")
-        color = {
-            "running": T.TOOL_BORDER,
-            "success": T.SUCCESS_BORDER,
-            "failed": T.ERROR_BORDER,
-        }.get(self._status, T.TOOL_BORDER)
+        icon_map = {
+            "queued": "○",
+            "running": "●",
+            "success": "✓",
+            "failed": "✗",
+            "skipped": "–",
+            "cancelled": "–",
+        }
+        icon = icon_map.get(self._status, "●")
+        color = T.stage_color(self._status)
 
-        status_label = {"running": "running", "success": "success", "failed": "failed"}.get(self._status, self._status)
-        duration_str = self._format_duration()
+        dur = self._format_duration()
+        dur_str = f" {dur}" if dur else ""
+        label = self._status_label()
+        attempt = f" [{self._attempts}]" if self._attempts > 1 else ""
 
         header_text = (
-            f"[bold {color}]{icon}[/] [{color}]{self.tool_name}[/] "
-            f"[dim]{status_label}{duration_str}[/]"
+            f"[bold {color}]{icon} {self.tool_name}[/] "
+            f"[dim {color}]{label}{dur_str}{attempt}[/]"
         )
         try:
             self.query_one(".tool-header", Static).update(header_text)
@@ -109,8 +136,18 @@ class ToolCard(Widget):
         except Exception:
             pass
 
+        # Auto-collapse on success, expand on failure
+        try:
+            collapsible = self.query_one(Collapsible)
+            if self._status == "success":
+                collapsible.collapsed = True
+            elif self._status in ("failed", "running"):
+                collapsible.collapsed = False
+        except Exception:
+            pass
+
     def compose(self) -> ComposeResult:
-        with Collapsible(title="", classes="tool-collapsible"):
+        with Collapsible(title="", classes="tool-collapsible", collapsed=False):
             yield Static("", classes="tool-header")
             yield Static("", classes="tool-body", display=False)
 

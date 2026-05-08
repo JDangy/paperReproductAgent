@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Bottom composer / input widget."""
+"""Enhanced composer with mode-aware placeholder."""
 
 from textual.message import Message
 from textual.widget import Widget
@@ -10,7 +10,7 @@ from .. import theme as T
 
 
 class Composer(Widget):
-    """Fixed-bottom input area with prompt."""
+    """Fixed-bottom input area with mode-aware placeholder."""
 
     DEFAULT_CSS = """
     Composer {
@@ -18,6 +18,7 @@ class Composer(Widget):
         dock: bottom;
         padding: 0 1;
         background: $surface;
+        border-top: solid $primary-darken-2;
     }
     Composer Input {
         width: 100%;
@@ -25,15 +26,21 @@ class Composer(Widget):
     """
 
     class Submitted(Message):
-        """Posted when user submits text."""
-
         def __init__(self, value: str) -> None:
             self.value = value
             super().__init__()
 
-    def __init__(self, placeholder: str = "输入 PDF 路径或 /help 查看帮助", **kwargs: object) -> None:
+    def __init__(
+        self,
+        placeholder: str | None = None,
+        mode: str = "act",
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)
-        self._placeholder = placeholder
+        self._mode = mode
+        self._running = False
+        self._default = placeholder or "输入 PDF 路径，或 /help 查看命令"
+        self._placeholder = self._default
 
     def compose(self):
         yield Input(
@@ -45,7 +52,6 @@ class Composer(Widget):
         value = event.value.strip()
         if not value:
             return
-        # Clear the input
         event.input.value = ""
         self.post_message(self.Submitted(value))
 
@@ -56,13 +62,35 @@ class Composer(Widget):
         except Exception:
             pass
 
-    def set_disabled(self, disabled: bool) -> None:
+    def set_placeholder_text(self, text: str) -> None:
+        self._default = text
+        if not self._running:
+            self._placeholder = text
+            self._update_placeholder()
+
+    def set_running(self, running: bool) -> None:
+        self._running = running
+        if running:
+            self._placeholder = "Agent 运行中 · 可用 /status /logs /cancel"
+        else:
+            self._placeholder = self._default
+        self._update_placeholder()
+
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode.lower()
+        if not self._running:
+            if self._mode == "plan":
+                self._placeholder = "PLAN 模式：输入 /act 切换执行，或 /run 查看计划"
+            else:
+                self._placeholder = self._default
+        self._update_placeholder()
+
+    def _update_placeholder(self) -> None:
         try:
             input_widget = self.query_one("#composer-input", Input)
-            if disabled:
-                input_widget.placeholder = "Agent 运行中 · 可用 /status /logs /cancel"
-            else:
-                input_widget.placeholder = self._placeholder
-                input_widget.focus()
+            input_widget.placeholder = self._placeholder
         except Exception:
             pass
+
+    def set_disabled(self, disabled: bool) -> None:
+        self.set_running(disabled)
