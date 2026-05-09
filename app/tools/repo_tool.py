@@ -192,6 +192,29 @@ def _drain_queue(q: Queue[str]) -> list[str]:
     return items
 
 
+def detect_git_proxy() -> dict[str, str]:
+    """Detect proxy from env vars and git global config."""
+    proxies: dict[str, str] = {}
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        v = os.environ.get(k)
+        if v:
+            proxies[k] = v
+    for cn in ("http.proxy", "https.proxy"):
+        try:
+            r = subprocess.run(["git", "config", "--global", "--get", cn],
+                               capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                proxies[f"git_{cn.replace('.', '_')}"] = r.stdout.strip()
+        except Exception:
+            pass
+    return proxies
+
+
+def mask_proxy_url(value: str) -> str:
+    """Mask credentials in proxy URLs. http://u:p@h:p → http://***@h:p"""
+    return re.sub(r"(https?://)([^:@/]+):([^@/]+)@", r"\1***@", value)
+
+
 def make_progress_bar(percent: int | None, width: int = 15) -> str:
     if percent is None or percent < 0:
         return ""

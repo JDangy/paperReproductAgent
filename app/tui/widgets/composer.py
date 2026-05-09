@@ -64,6 +64,8 @@ class Composer(Widget):
         self._completion_items: list[CompletionItem] = []
         self._completion_index: int = 0
         self._completion_visible: bool = False
+        self._completion_scroll: int = 0
+        self._visible_count: int = 4
 
     def compose(self):
         yield Static("", id="completion-popup")
@@ -107,6 +109,7 @@ class Composer(Widget):
     def _show_completion(self, items: list[CompletionItem]) -> None:
         self._completion_items = items
         self._completion_index = 0
+        self._completion_scroll = 0
         self._completion_visible = True
         self._refresh_completion_display()
         self.add_class("has-completion")
@@ -114,6 +117,7 @@ class Composer(Widget):
     def _hide_completion(self) -> None:
         self._completion_items.clear()
         self._completion_index = 0
+        self._completion_scroll = 0
         self._completion_visible = False
         self.remove_class("has-completion")
         try:
@@ -145,16 +149,30 @@ class Composer(Widget):
             return
 
         popup.add_class("visible")
+        n = len(self._completion_items)
+        self._completion_scroll = _ensure_visible(self._completion_index, self._completion_scroll, n, self._visible_count)
+
+        start = self._completion_scroll
+        end = min(n, start + self._visible_count)
         lines: list[str] = []
-        for i, item in enumerate(self._completion_items):
+        for i in range(start, end):
+            item = self._completion_items[i]
             prefix = ">" if i == self._completion_index else " "
             color = T.GREEN if i == self._completion_index else T.FG_DIM
             arg_part = f" {item.display_args or item.args}" if (item.display_args or item.args) else ""
-            desc = item.description[:50]  # truncate long descriptions
-            lines.append(
-                f"[{color}]{prefix} /{item.command}{arg_part:<20}[/] [{T.FG_DIM}]{desc}[/]"
-            )
+            desc = item.description[:50]
+            lines.append(f"[{color}]{prefix} /{item.command}{arg_part:<20}[/] [{T.FG_DIM}]{desc}[/]")
+        if n > self._visible_count:
+            lines.append(f"[dim]{start + 1}-{end} / {n}[/]")
         popup.update("\n".join(lines))
+
+    def move_completion(self, delta: int) -> bool:
+        if not self._completion_items:
+            return False
+        n = len(self._completion_items)
+        self._completion_index = max(0, min(n - 1, self._completion_index + delta))
+        self._refresh_completion_display()
+        return True
 
     # ── Completion navigation ───────────────────────────────
 
@@ -241,3 +259,14 @@ class Composer(Widget):
 
     def set_disabled(self, disabled: bool) -> None:
         self.set_running(disabled)
+
+
+def _ensure_visible(selected: int, scroll: int, total: int, visible: int) -> int:
+    """Adjust scroll so that *selected* index is within the visible window."""
+    if total <= visible:
+        return 0
+    if selected < scroll:
+        return selected
+    if selected >= scroll + visible:
+        return selected - visible + 1
+    return scroll

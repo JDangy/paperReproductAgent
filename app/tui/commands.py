@@ -37,6 +37,7 @@ COMMANDS: dict[str, CommandMeta] = {
     "logs": CommandMeta("logs", "<type>", "查看日志（env/smoke/benchmark 等）", "查看", True, display_args="<日志类型>"),
     "cancel": CommandMeta("cancel", "", "取消当前任务", "运行", True),
     "sessions": CommandMeta("sessions", "", "列出历史会话", "会话", True),
+    "session": CommandMeta("session", "", "列出历史会话", "会话", True),
     "resume": CommandMeta("resume", "<session-id>", "恢复历史会话", "会话", False, display_args="<会话ID>"),
     "quit": CommandMeta("quit", "", "退出 TUI", "系统", True),
     "exit": CommandMeta("exit", "", "退出 TUI", "系统", True),
