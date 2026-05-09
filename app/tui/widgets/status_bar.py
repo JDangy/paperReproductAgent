@@ -13,8 +13,8 @@ class StatusBar(Widget):
 
     DEFAULT_CSS = """
     StatusBar {
-        dock: bottom;
         height: 1;
+        min-height: 1;
         width: 100%;
         background: $surface;
         color: $text-muted;

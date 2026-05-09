@@ -90,6 +90,10 @@ class PaperAgentApp(App):
         Binding("ctrl+c", "quit", "退出", show=True),
         Binding("ctrl+l", "clear_screen", "清屏", show=True),
         Binding("ctrl+p", "toggle_plan_mode", "PLAN/ACT", show=True),
+        Binding("tab", "accept_completion", "补全", show=False),
+        Binding("down", "completion_down", "下一个补全", show=False),
+        Binding("up", "completion_up", "上一个补全", show=False),
+        Binding("escape", "hide_completion", "关闭补全", show=False),
     ]
 
     def __init__(
@@ -126,10 +130,15 @@ class PaperAgentApp(App):
         self._pipeline_panel: PipelinePanel | None = None
         self._help_panel: HelpPanel | None = None
         self._artifact_panel: ArtifactPanel | None = None
+        self._right_session_panel: SessionPanel | None = None
 
         # Tool cards tracking
         self._tool_cards: dict[str, ToolCard] = {}
         self._active_tool_by_stage: dict[str, str] = {}
+
+        # Stage view state (survives panel switches)
+        self._stage_views: dict[str, StageView] = {}
+        self._reset_stage_views()
 
     # ── Compose ──────────────────────────────────────────────
 
@@ -148,8 +157,9 @@ class PaperAgentApp(App):
             # Center: Timeline
             yield MessageTimeline(id="timeline-area")
 
-            # Right: dynamic panel (pipeline / help / artifacts)
-            yield PipelinePanel(backend=self.session.backend, id="right-panel")
+            # Right: dynamic panel container
+            with Container(id="right-panel"):
+                yield PipelinePanel(backend=self.session.backend)
 
         yield StatusBar()
         yield Composer(mode="act")
@@ -159,8 +169,8 @@ class PaperAgentApp(App):
         self._timeline = self.query_one(MessageTimeline)
         self._status_bar = self.query_one(StatusBar)
         self._composer = self.query_one(Composer)
-        self._session_panel = self.query_one(SessionPanel)
-        self._pipeline_panel = self.query_one(PipelinePanel)
+        self._session_panel = self.query_one("#main-content SessionPanel")
+        self._pipeline_panel = self.query_one("#right-panel PipelinePanel")
 
         self._composer.focus_input()
         self._add_assistant(
@@ -258,32 +268,90 @@ class PaperAgentApp(App):
             reproduction_log=str(td / "runs" / "reproduction_001" / "stderr.log"),
         )
 
+    # ── Stage state management ───────────────────────────────
+
+    def _reset_stage_views(self) -> None:
+        """Initialize stage views based on current backend."""
+        from .panels.pipeline_panel import PIPELINE_STAGES
+        self._stage_views.clear()
+        for stage_name in PIPELINE_STAGES:
+            active = self._is_stage_active(stage_name)
+            self._stage_views[stage_name] = StageView(
+                name=stage_name,
+                status="queued" if active else "disabled",
+            )
+
+    def _is_stage_active(self, stage: str) -> bool:
+        build_map = {
+            "Build conda env": "conda",
+            "Build virtualenv": "venv",
+            "Build Docker image": "docker",
+        }
+        if stage in build_map:
+            return build_map[stage] == self.session.backend
+        if self.session.backend == "none" and stage in (
+            "Run smoke command", "Run benchmark reproduction", "Run simple reproduction",
+        ):
+            return False
+        return True
+
+    def _sync_pipeline_panel(self) -> None:
+        """Sync stage views to the active pipeline panel."""
+        if not self._pipeline_panel:
+            return
+        for sv in self._stage_views.values():
+            self._pipeline_panel._stages[sv.name] = sv
+        self._pipeline_panel._refresh()
+
     # ── Panel switching ──────────────────────────────────────
 
     def _switch_panel(self, name: str) -> None:
         self._active_panel = name
-        right = self.query_one("#right-panel")
+        right = self.query_one("#right-panel", Container)
         right.remove_children()
 
         if name == "session":
-            right.mount(SessionPanel(classes="left-panel"))
-            self._session_panel = self.query_one("#right-panel SessionPanel")
-            self._sync_session_panel()
+            panel = SessionPanel()
+            right.mount(panel)
+            self._right_session_panel = panel
+            self._sync_right_session_panel()
+
         elif name == "pipeline":
-            right.mount(PipelinePanel(backend=self.session.backend))
-            self._pipeline_panel = self.query_one("#right-panel PipelinePanel")
+            panel = PipelinePanel(backend=self.session.backend)
+            right.mount(panel)
+            self._pipeline_panel = panel
+            # Restore stage state
+            for sv in self._stage_views.values():
+                panel._stages[sv.name] = sv
+            panel._refresh()
+
         elif name == "help":
-            right.mount(HelpPanel())
-            self._help_panel = self.query_one("#right-panel HelpPanel")
+            panel = HelpPanel()
+            right.mount(panel)
+            self._help_panel = panel
+
         elif name == "artifacts":
-            right.mount(ArtifactPanel())
-            self._artifact_panel = self.query_one("#right-panel ArtifactPanel")
+            panel = ArtifactPanel()
+            right.mount(panel)
+            self._artifact_panel = panel
             self._sync_artifact_panel()
+
         elif name == "none":
-            # Keep empty
             pass
 
         self._update_status()
+
+    def _sync_right_session_panel(self) -> None:
+        if self._right_session_panel:
+            s = self.session
+            self._right_session_panel.update_session(
+                session_id=s.id, mode=s.mode, backend=s.backend,
+                workspace=s.workspace, paper=s.paper_path or "",
+                repo=s.repo or "", repo_dir=s.repo_dir or "",
+                timeout=str(s.timeout_minutes), repairs=str(s.max_repair_attempts),
+                task_dir=s.task_dir or "", report_path=s.report_path or "",
+                status=s.status, cancel_requested=s.cancel_requested,
+            )
 
     # ── Tool card helpers ────────────────────────────────────
 
@@ -324,56 +392,63 @@ class PaperAgentApp(App):
         if status in ("success", "failed"):
             self._active_tool_by_stage.pop(stage, None)
 
-    # ── Progress bridge ──────────────────────────────────────
+    # ── Progress handling ────────────────────────────────────
 
-    def _start_progress_bridge(self) -> None:
-        _stage_times: dict[str, float] = {}
+    def _handle_progress_event(self, ev: ProgressEvent, stage_times: dict[str, float]) -> None:
+        """Handle a progress event from the pipeline thread (called via call_from_thread)."""
+        name = ev.stage
+        now = time.monotonic()
 
-        def on_event(ev: ProgressEvent) -> None:
-            name = ev.stage
-            now = time.monotonic()
+        if ev.phase == "start":
+            stage_times[name] = now
+        duration = None
+        if name in stage_times and ev.phase in ("finish", "fail"):
+            duration = now - stage_times[name]
 
-            # Track duration
-            if ev.phase == "start":
-                _stage_times[name] = now
-            duration = None
-            if name in _stage_times and ev.phase in ("finish", "fail"):
-                duration = now - _stage_times[name]
+        phase_status = {
+            "start": "running",
+            "finish": "success",
+            "fail": "failed",
+            "progress": "running",
+            "skip": "skipped",
+        }
+        status = phase_status.get(ev.phase, "running")
 
-            # Map phase → status
-            phase_status = {
-                "start": "running",
-                "finish": "success",
-                "fail": "failed",
-                "progress": "running",
-                "skip": "skipped",
-            }
-            status = phase_status.get(ev.phase, "running")
+        # Update app-level stage views
+        if name in self._stage_views:
+            sv = self._stage_views[name]
+            if sv.status in ("failed", "success", "skipped") and status == "running":
+                sv.attempts += 1
+            sv.status = status  # type: ignore[assignment]
+            sv.message = ev.message
+            sv.detail = ev.detail or ""
+            sv.duration = duration
 
-            # Update tool card
-            card = self._get_or_create_tool_card(name, ev.message)
-            card.update(
-                status=status,
-                message=ev.message,
-                detail=ev.detail or "",
+        # Update tool card
+        card = self._get_or_create_tool_card(name, ev.message)
+        card.update(
+            status=status,
+            message=ev.message,
+            detail=ev.detail or "",
+            duration=duration,
+        )
+
+        # Update pipeline panel
+        if self._pipeline_panel:
+            self._pipeline_panel.update_from_name(
+                name=name, status=status,
+                message=ev.message, detail=ev.detail or "",
                 duration=duration,
             )
 
-            # Update pipeline panel
-            if self._pipeline_panel:
-                self._pipeline_panel.update_from_name(
-                    name=name,
-                    status=status,
-                    message=ev.message,
-                    detail=ev.detail or "",
-                    duration=duration,
-                )
+        # Update status bar
+        if self._status_bar:
+            self._status_bar.update_info(status=status)
+        if self._header:
+            self._header.update_summary(status=status)
 
-            if ev.phase in ("finish", "fail"):
-                self._sync_artifact_panel()
-
-        self._bridge = on_event
-        progress_events(on_event)
+        if ev.phase in ("finish", "fail"):
+            self._sync_artifact_panel()
 
     # ── Composer input ───────────────────────────────────────
 
@@ -392,10 +467,16 @@ class PaperAgentApp(App):
         if command == "":
             return
 
-        # Running guard
+        # Running guard — blocks !shell and other unsafe commands
         if self.agent_running and command not in RUNNING_SAFE_COMMANDS:
-            safe = " ".join(f"/{c}" for c in sorted(RUNNING_SAFE_COMMANDS - {"!"}))
-            self._add_assistant(f"Agent 正在运行。可用命令：{safe}")
+            if command == "!":
+                self._add_assistant(
+                    "Agent 正在运行，暂不允许执行 shell 命令。"
+                    "可用 /status /logs /cancel 查看或控制任务。"
+                )
+            else:
+                safe = " ".join(f"/{c}" for c in sorted(RUNNING_SAFE_COMMANDS))
+                self._add_assistant(f"Agent 正在运行。可用命令：{safe}")
             return
 
         if command == "!":
@@ -634,10 +715,10 @@ class PaperAgentApp(App):
         self._sync_session_panel()
         if self._composer:
             self._composer.set_running(True)
+
+        self._reset_stage_views()
         if self._pipeline_panel:
             self._pipeline_panel.reset(self.session.backend)
-
-        self._start_progress_bridge()
 
         def _cancel_check() -> bool:
             return self.session.cancel_requested
@@ -649,17 +730,25 @@ class PaperAgentApp(App):
 
     async def _do_run(self, paper: str, cancel_check) -> None:
         try:
-            state = await asyncio.to_thread(
-                self.runner,
-                paper,
-                self.session.workspace,
-                self.session.backend,
-                self.session.repo,
-                self.session.repo_dir,
-                self.session.timeout_minutes,
-                self.session.max_repair_attempts,
-                cancel_check,
-            )
+            stage_times: dict[str, float] = {}
+
+            def run_with_progress():
+                def on_event(ev: ProgressEvent) -> None:
+                    self.call_from_thread(self._handle_progress_event, ev, stage_times)
+
+                with progress_events(on_event):
+                    return self.runner(
+                        input_value=paper,
+                        workspace=self.session.workspace,
+                        backend=self.session.backend,
+                        repo=self.session.repo,
+                        repo_dir=self.session.repo_dir,
+                        timeout_minutes=self.session.timeout_minutes,
+                        max_repair_attempts=self.session.max_repair_attempts,
+                        should_cancel=cancel_check,
+                    )
+
+            state = await asyncio.to_thread(run_with_progress)
 
             self.session.task_dir = state.task_dir
             self.session.status = getattr(state, "status", "completed")
@@ -774,14 +863,26 @@ class PaperAgentApp(App):
             return
 
         td = Path(self.session.task_dir)
+
+        # Backend-aware log paths
+        backend = self.session.backend
+        build_log = td / "env" / "conda_build.log"
+        if backend == "venv":
+            build_log = td / "env" / "venv_build.log"
+        elif backend in ("docker", "local", "none"):
+            build_log = td / "env" / "build.log"
+
         log_map: dict[str, Path] = {
-            "env": td / "env" / "conda_build.log",
+            "env": build_log,
             "conda": td / "env" / "conda_build.log",
             "venv": td / "env" / "venv_build.log",
-            "build": td / "env" / "conda_build.log",
+            "build": build_log,
             "smoke": td / "runs" / "smoke_001" / "stdout.log",
+            "smoke-stderr": td / "runs" / "smoke_001" / "stderr.log",
             "benchmark": td / "runs" / "benchmark_001" / "stderr.log",
+            "benchmark-stdout": td / "runs" / "benchmark_001" / "stdout.log",
             "reproduction": td / "runs" / "reproduction_001" / "stderr.log",
+            "reproduction-stdout": td / "runs" / "reproduction_001" / "stdout.log",
             "stderr": td / "runs" / "smoke_001" / "stderr.log",
             "stdout": td / "runs" / "smoke_001" / "stdout.log",
         }
@@ -877,6 +978,24 @@ class PaperAgentApp(App):
         self.exit()
 
     # ── Bindings ──────────────────────────────────────────────
+
+    # ── Bindings ──────────────────────────────────────────────
+
+    def action_accept_completion(self) -> None:
+        if self._composer and self._composer.accept_completion():
+            return
+
+    def action_completion_down(self) -> None:
+        if self._composer and self._composer.move_completion(1):
+            return
+
+    def action_completion_up(self) -> None:
+        if self._composer and self._composer.move_completion(-1):
+            return
+
+    def action_hide_completion(self) -> None:
+        if self._composer:
+            self._composer.hide_completion()
 
     def action_toggle_plan_mode(self) -> None:
         if self.session.mode == "plan":

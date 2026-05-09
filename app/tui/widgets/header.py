@@ -11,13 +11,24 @@ from ..logo import render_logo, render_compact_logo, SUBTITLE
 from .. import theme as T
 
 
+def join_rich_lines(lines: list[RichText]) -> RichText:
+    """Join a list of Rich Text lines with newlines, preserving style spans."""
+    result = RichText()
+    for i, line in enumerate(lines):
+        result.append_text(line)
+        if i < len(lines) - 1:
+            result.append("\n")
+    return result
+
+
 class HeaderLogo(Widget):
     """Top header: gradient ASCII logo, subtitle, and session summary."""
 
     DEFAULT_CSS = """
     HeaderLogo {
         height: auto;
-        padding: 1 1 0 1;
+        max-height: 10;
+        padding: 0 1;
         background: $surface;
         border-bottom: solid $primary-darken-2;
     }
@@ -26,12 +37,12 @@ class HeaderLogo(Widget):
     }
     HeaderLogo #subtitle-area {
         height: auto;
-        padding: 1 0 0 0;
+        padding: 0 0 0 0;
     }
     HeaderLogo #summary-area {
         height: 1;
         color: $text-muted;
-        padding: 1 0 0 0;
+        padding: 0 0 0 0;
     }
     """
 
@@ -66,10 +77,6 @@ class HeaderLogo(Widget):
             self.status = status
         self._refresh_summary()
 
-    def _render_logo(self, max_width: int | None = None) -> list[RichText]:
-        texts = render_logo(max_width)
-        return texts
-
     def compose(self) -> ComposeResult:
         yield Static("", id="logo-area")
         yield Static("", id="subtitle-area")
@@ -79,15 +86,17 @@ class HeaderLogo(Widget):
         self._render_and_display()
 
     def _render_and_display(self) -> None:
-        """Render logo based on available width."""
+        """Render logo based on available width.  Pass RichText directly to preserve colour spans."""
         try:
-            logo_texts = render_logo(max_width=self.size.width if self.size else None)
+            width = self.size.width if self.size else None
+            logo_texts = render_logo(max_width=width)
         except Exception:
             logo_texts = [render_compact_logo()]
 
-        logo_md = "\n".join(str(t) for t in logo_texts)
+        # Use Rich renderable directly — do NOT convert to str()
+        logo_renderable = join_rich_lines(logo_texts)
         try:
-            self.query_one("#logo-area", Static).update(logo_md)
+            self.query_one("#logo-area", Static).update(logo_renderable)
         except Exception:
             pass
 

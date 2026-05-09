@@ -42,4 +42,4 @@ COMMANDS: dict[str, CommandMeta] = {
 }
 
 RUNNING_SAFE_COMMANDS: set[str] = {n for n, m in COMMANDS.items() if m.safe_during_run}
-RUNNING_SAFE_COMMANDS.add("!")  # shell needs confirmation but is still allowed
+# Shell is NOT safe during run — requires confirmation UI that blocks
