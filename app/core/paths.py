@@ -56,6 +56,10 @@ def default_project_workspace() -> Path:
     return find_project_root() / "workspace"
 
 
+def project_pdf_dir() -> Path:
+    return find_project_root() / "pdf"
+
+
 def resolve_workspace_path(value: str | Path | None, *, explicit: bool = False) -> Path:
     """Resolve a workspace path.
 

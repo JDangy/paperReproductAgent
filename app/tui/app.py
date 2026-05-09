@@ -3,6 +3,7 @@ from __future__ import annotations
 """PaperAgentApp – Textual-based Claude Code-style TUI."""
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,9 +30,21 @@ PipelineRunner = Callable[..., TaskState]
 
 SLASH_COMMANDS_SET: set[str] = set(COMMANDS.keys())
 
+_ARXIV_DETECT_RE = re.compile(r"\d{4}\.\d{4,5}(?:v\d+)?")
+
+
+def _looks_like_arxiv(value: str) -> bool:
+    v = value.strip()
+    return (
+        "arxiv.org/abs/" in v.lower()
+        or "arxiv.org/pdf/" in v.lower()
+        or v.lower().startswith("arxiv:")
+        or bool(_ARXIV_DETECT_RE.fullmatch(v))
+    )
+
 # Help categories: grouped command names in display order
 _HELP_CATEGORIES: dict[str, list[str]] = {
-    "输入": ["input", "repo", "repo-dir"],
+    "输入": ["input", "arxiv", "download-arxiv", "repo", "repo-dir"],
     "运行": ["backend", "workspace", "timeout", "repairs", "run", "cancel"],
     "查看": ["status", "logs", "report", "artifact", "open-report"],
     "模式": ["plan", "act", "mode"],
@@ -434,6 +447,7 @@ class PaperAgentApp(App):
         "Run benchmark reproduction": "运行 benchmark 复现",
         "Run simple reproduction": "运行轻量复现",
         "Write report": "生成报告",
+        "Download arXiv PDF": "下载 arXiv PDF",
     }
 
     _PHASE_LABELS_CN: dict[str, str] = {
@@ -604,6 +618,9 @@ class PaperAgentApp(App):
             self._run_shell(args)
             return
         if command == "message":
+            if _looks_like_arxiv(args):
+                self._cmd_arxiv(args)
+                return
             self._submit_paper(args)
             return
         if command == "unknown_command":
@@ -617,6 +634,8 @@ class PaperAgentApp(App):
             "plan": self._cmd_plan,
             "act": self._cmd_act,
             "input": self._cmd_input,
+            "arxiv": self._cmd_arxiv,
+            "download-arxiv": self._cmd_arxiv,
             "repo": self._cmd_repo,
             "repo-dir": self._cmd_repo_dir,
             "backend": self._cmd_backend,
@@ -749,6 +768,72 @@ class PaperAgentApp(App):
         self.session.input_resolved = False
         self._sync_session_panel()
         self._add_assistant(f"输入已设置：`{self.session.paper_path}`")
+
+    def _cmd_arxiv(self, args: str) -> None:
+        value = args.strip()
+        if not value:
+            self._add_error("用法：`/arxiv <arXiv ID 或 URL>`，例如 `/arxiv https://arxiv.org/abs/1911.11763`")
+            return
+        if self.agent_running:
+            self._add_error("Agent 正在运行，请等待任务完成或先 `/cancel`。")
+            return
+        self._add_assistant(f"开始从 arXiv 下载 PDF：`{value}`")
+        self.run_worker(self._download_arxiv_worker(value), exclusive=False)
+
+    async def _download_arxiv_worker(self, value: str) -> None:
+        from app.core.paths import project_pdf_dir
+        from app.tools.arxiv_download import download_arxiv_pdf, make_progress_bar as arxiv_bar
+
+        def progress_cb(event: dict) -> None:
+            phase = event.get("phase")
+            if phase == "start":
+                self.call_from_thread(lambda: self._add_system(
+                    f"arXiv 下载开始\n- URL：{event.get('pdf_url')}\n- 保存：{event.get('pdf_path')}"
+                ))
+            elif phase == "progress":
+                pct = event.get("percent")
+                dl = int(event.get("downloaded") or 0)
+                tot = int(event.get("total") or 0)
+                bar = arxiv_bar(pct)
+                msg = f"{bar} 已下载 {dl / 1024 / 1024:.1f} MiB"
+                if tot:
+                    msg += f" / {tot / 1024 / 1024:.1f} MiB"
+                final_msg = msg
+                self.call_from_thread(lambda m=final_msg: self._upsert_arxiv_progress(m))
+            elif phase == "finish":
+                self.call_from_thread(lambda: self._upsert_arxiv_progress("下载完成，正在导入"))
+
+        result = await asyncio.to_thread(
+            download_arxiv_pdf, value,
+            output_dir=project_pdf_dir(), overwrite=False, progress_cb=progress_cb,
+        )
+
+        if result.success and result.pdf_path:
+            self.session.paper_path = str(result.pdf_path.resolve())
+            self.session.input_resolved = True
+            self.session.status = "draft"
+            self.call_from_thread(self._sync_session_panel)
+            self.call_from_thread(self._update_status)
+            reused = "（复用已有文件）" if result.reused_existing else ""
+            self.call_from_thread(lambda: self._add_assistant(
+                f"arXiv PDF 下载完成{reused}。\n\n"
+                f"- arXiv ID：`{result.arxiv_id}`\n"
+                f"- PDF：`{result.pdf_path}`\n\n"
+                "已自动设为当前论文。现在可以执行 `/run`。"
+            ))
+            card = self._get_active_tool_card("Download arXiv PDF")
+            if card:
+                card.update(status="success", message="下载 arXiv PDF")
+        else:
+            self.call_from_thread(lambda: self._add_error(
+                f"arXiv PDF 下载失败：{result.error or '未知错误'}"
+            ))
+
+    def _upsert_arxiv_progress(self, text: str) -> None:
+        stage = "Download arXiv PDF"
+        card = self._get_or_create_tool_card(stage, "下载 arXiv PDF")
+        card.upsert_log("arxiv_download", text)
+        card.update(status="running", message="下载 arXiv PDF")
 
     def _cmd_repo(self, args: str) -> None:
         self.session.repo = args.strip() or None

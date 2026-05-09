@@ -26,6 +26,8 @@ COMMANDS: dict[str, CommandMeta] = {
     "plan": CommandMeta("plan", "", "切换到计划模式，不执行命令", "模式", False),
     "act": CommandMeta("act", "", "切换到执行模式", "模式", False),
     "input": CommandMeta("input", "<path>", "设置本地论文 PDF 路径", "输入", False, display_args="<PDF路径>"),
+    "arxiv": CommandMeta("arxiv", "<arXiv ID 或 URL>", "从 arXiv 下载 PDF 并设为当前论文", "输入", False, display_args="<arXiv ID或URL>"),
+    "download-arxiv": CommandMeta("download-arxiv", "<arXiv ID 或 URL>", "从 arXiv 下载 PDF 并设为当前论文", "输入", False, display_args="<arXiv ID或URL>"),
     "repo": CommandMeta("repo", "<url>", "直接指定 GitHub 仓库地址", "输入", False, display_args="<仓库URL>"),
     "repo-dir": CommandMeta("repo-dir", "<path>", "指定本地代码仓库目录", "输入", False, display_args="<本地仓库目录>"),
     "backend": CommandMeta("backend", "[none|local|venv|conda|docker]", "设置执行后端", "运行", False, display_args="<后端>"),
