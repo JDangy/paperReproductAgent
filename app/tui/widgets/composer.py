@@ -15,21 +15,22 @@ class Composer(Widget):
 
     DEFAULT_CSS = """
     Composer {
-        height: 5;
-        min-height: 5;
-        padding: 1 1 1 1;
+        height: 7;
+        min-height: 7;
+        padding: 1 1 2 1;
         background: $surface;
         border-top: solid $primary-darken-2;
     }
     Composer.has-completion {
-        height: 9;
-        min-height: 9;
+        height: 11;
+        min-height: 11;
     }
     Composer Input {
         height: 3;
         min-height: 3;
         width: 100%;
         content-align: left middle;
+        margin-bottom: 1;
     }
     #completion-popup {
         height: 4;

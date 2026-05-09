@@ -101,6 +101,8 @@ def render_logo(max_width: int | None = None) -> list[Text]:
 
     If *max_width* is provided and the trilingual logo exceeds it, a
     compact single-line title is returned instead.
+    If *max_width* is wider than the logo, each line is padded with
+    leading spaces so the logo appears centered.
     """
     lines = build_logo_lines()
     if not lines:
@@ -108,18 +110,34 @@ def render_logo(max_width: int | None = None) -> list[Text]:
 
     full_width = max(len(l) for l in lines)
     if max_width is not None and full_width > max_width:
-        return [render_compact_logo()]
+        return [render_compact_logo(max_width=max_width)]
+
+    target_width = max_width if max_width is not None and max_width > full_width else full_width
 
     result: list[Text] = []
     for line in lines:
-        result.append(gradient_text(line, full_width))
+        pad = max((target_width - len(line)) // 2, 0)
+        padded = " " * pad + line
+        result.append(gradient_text(padded, target_width))
     return result
 
 
-def render_compact_logo() -> Text:
-    """Single-line logo for narrow terminals."""
-    text = Text()
+def render_compact_logo(max_width: int | None = None) -> Text:
+    """Single-line logo for narrow terminals.  Centered when max_width is given."""
     words = ["Paper", "Reproduct", "Agent"]
+
+    # Build raw text first to measure width
+    raw = "  ".join(words)
+
+    if max_width is not None and max_width > len(raw):
+        pad = max((max_width - len(raw)) // 2, 0)
+    else:
+        pad = 0
+
+    text = Text()
+    if pad:
+        text.append(" " * pad)
+
     for i, w in enumerate(words):
         pos = i / max(len(words) - 1, 1)
         color = _gradient_color(pos)

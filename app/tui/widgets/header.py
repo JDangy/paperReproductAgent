@@ -35,7 +35,7 @@ class HeaderLogo(Widget):
     DEFAULT_CSS = """
     HeaderLogo {
         height: auto;
-        max-height: 10;
+        max-height: 8;
         padding: 0 1;
         background: $surface;
         border-bottom: solid $primary-darken-2;
@@ -95,11 +95,11 @@ class HeaderLogo(Widget):
 
     def _render_and_display(self) -> None:
         """Render logo based on available width.  Pass RichText directly to preserve colour spans."""
+        width = self.size.width if self.size and self.size.width > 20 else None
         try:
-            width = self.size.width if self.size else None
             logo_texts = render_logo(max_width=width)
         except Exception:
-            logo_texts = [render_compact_logo()]
+            logo_texts = [render_compact_logo(max_width=width)]
 
         # Use Rich renderable directly — do NOT convert to str()
         logo_renderable = join_rich_lines(logo_texts)

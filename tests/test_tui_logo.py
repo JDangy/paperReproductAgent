@@ -18,7 +18,7 @@ def test_render_logo_narrow_falls_back_to_compact():
 
 
 def test_render_logo_wide_returns_full():
-    texts = render_logo(max_width=200)
+    texts = render_logo(max_width=300)
     assert len(texts) > 1
 
 
@@ -27,6 +27,22 @@ def test_render_compact_logo_returns_text():
     assert "Paper" in str(text)
     assert "Reproduct" in str(text)
     assert "Agent" in str(text)
+
+
+def test_render_logo_centers_with_extra_width():
+    texts = render_logo(max_width=300)
+    s = str(texts[0])
+    assert s.startswith(" ")
+    assert "█" in s
+
+
+def test_render_compact_logo_centers_with_width():
+    text = render_compact_logo(max_width=80)
+    s = str(text)
+    assert "Paper" in s
+    assert "Reproduct" in s
+    assert "Agent" in s
+    assert s.startswith(" ")
 
 
 def test_gradient_text_returns_rich_text():

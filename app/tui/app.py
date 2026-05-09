@@ -97,7 +97,8 @@ class PaperAgentApp(App):
         width: 34;
         height: 1fr;
     }
-    #bottom-spacer {
+    #bottom-spacer-1,
+    #bottom-spacer-2 {
         height: 1;
         min-height: 1;
         background: $surface;
@@ -175,9 +176,10 @@ class PaperAgentApp(App):
             with Container(id="right-panel"):
                 yield PipelinePanel(backend=self.session.backend)
 
-        yield Composer(mode="act")
-        yield Static("", id="bottom-spacer")
         yield StatusBar()
+        yield Composer(mode="act")
+        yield Static("", id="bottom-spacer-1")
+        yield Static("", id="bottom-spacer-2")
 
     def on_mount(self) -> None:
         self._header = self.query_one(HeaderLogo)
