@@ -737,7 +737,21 @@ class PaperAgentApp(App):
                 return
             self.session.backend = backend
             self._sync_session_panel()
-            self._add_assistant(f"后端已设置为：**{backend}**")
+            if backend == "none":
+                self._add_assistant(
+                    "已切换到 **none** 模式：只做静态分析，不执行代码。\n\n"
+                    "该模式将执行：解析论文 → 理解论文 → 搜索 GitHub → 评估仓库 → 生成报告\n"
+                    "不会执行：构建环境、smoke 测试、benchmark 复现、轻量复现\n\n"
+                    "如需运行复现步骤，请使用 `/backend conda`。"
+                )
+            elif backend == "conda":
+                self._add_assistant("已切换到 **conda** 模式：将构建 conda 环境并执行 smoke/Benchmark/轻量复现。")
+            elif backend == "venv":
+                self._add_assistant("已切换到 **venv** 模式：将构建虚拟环境并执行 smoke/Benchmark/轻量复现。")
+            elif backend == "local":
+                self._add_assistant("已切换到 **local** 模式：跳过环境构建，直接在本地执行 smoke/Benchmark/轻量复现。")
+            elif backend == "docker":
+                self._add_assistant("已切换到 **docker** 模式：将构建 Docker 镜像并执行 smoke/Benchmark/轻量复现。")
             if self._pipeline_panel:
                 self._pipeline_panel.reset(backend)
         else:
@@ -822,6 +836,24 @@ class PaperAgentApp(App):
         self._add_user(f"复现论文：{paper}")
         self._add_assistant("收到，正在确认本地 PDF 是否可读取。")
 
+        # Warn if backend=none
+        if self.session.backend == "none":
+            self._add_assistant(
+                "当前执行后端为 **none**。\n\n"
+                "该模式将执行：\n"
+                "- 解析论文\n"
+                "- 理解论文\n"
+                "- 搜索 GitHub\n"
+                "- 评估仓库\n"
+                "- 生成报告\n\n"
+                "不会执行：\n"
+                "- 构建 conda / venv / docker 环境\n"
+                "- smoke 测试\n"
+                "- benchmark 复现\n"
+                "- 轻量复现\n\n"
+                "如需运行后续复现步骤，请先输入 `/backend conda`。"
+            )
+
         if self.session.mode == "plan":
             self._add_assistant(
                 "当前为 **PLAN** 模式，只显示执行计划。\n"
@@ -901,11 +933,19 @@ class PaperAgentApp(App):
 
             # Build final message
             final = getattr(state.report, "final_status", "unknown") if state.report else "unknown"
-            self._add_assistant(
-                f"**Pipeline 完成**\n\n"
-                f"- Final status: `{final}`\n"
-                f"- Report: `{report_path}`"
-            )
+            if final == "repo_found_smoke_not_run" and self.session.backend == "none":
+                self._add_assistant(
+                    f"**Pipeline 完成**\n\n"
+                    f"已完成静态评估。当前 backend=none，因此未执行代码复现步骤。\n"
+                    f"- Final status: `{final}`\n"
+                    f"- Report: `{report_path}`"
+                )
+            else:
+                self._add_assistant(
+                    f"**Pipeline 完成**\n\n"
+                    f"- Final status: `{final}`\n"
+                    f"- Report: `{report_path}`"
+                )
 
             if report_path.exists():
                 preview = report_path.read_text(encoding="utf-8", errors="ignore")[:2000]
