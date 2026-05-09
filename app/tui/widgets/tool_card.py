@@ -149,7 +149,9 @@ class ToolCard(Widget):
     def compose(self) -> ComposeResult:
         with Collapsible(title="", classes="tool-collapsible", collapsed=False):
             yield Static("", classes="tool-header")
-            yield Static("", classes="tool-body", display=False)
+            body = Static("", classes="tool-body")
+            body.display = False
+            yield body
 
     def on_mount(self) -> None:
         self._refresh_display()
