@@ -523,25 +523,50 @@ class PaperAgentApp(App):
             self._sync_artifact_panel()
 
     def _build_progress_log_lines(self, ev: ProgressEvent) -> list[str]:
-        """Extract log lines from a progress event for the ToolCard buffer."""
+        """Extract log lines from a progress event for the ToolCard buffer. Deduplicates progress bar text."""
         lines: list[str] = []
+        seen: set[str] = set()
+
+        def _add(clean: str) -> None:
+            if clean and clean not in seen:
+                seen.add(clean)
+                lines.append(clean)
+
+        # Progress-specific: single bar+text line, skip redundant fields
+        bar = ev.data.get("progress_bar")
+        pct = ev.data.get("progress_percent")
+        ptext = ev.data.get("progress_text")
+
+        if bar or ptext:
+            if bar and ptext:
+                _add(f"{bar} {clean_display_text(str(ptext))}")
+            elif ptext:
+                _add(clean_display_text(str(ptext)))
+            elif bar:
+                _add(str(bar))
+            # Skip clone_progress when we already have progress_bar/progress_text
+        else:
+            # Only use clone_progress if no progress_bar/progress_text
+            cp = ev.data.get("clone_progress")
+            if cp:
+                _add(clean_display_text(str(cp)))
+
         if ev.detail:
             for line in ev.detail.splitlines():
-                clean = clean_display_text(line)
-                if clean:
-                    lines.append(clean)
-        for key in ("repo_url", "repo_dir", "command", "log_path", "selected_repo", "runnable_score", "clone_progress", "proxy_status"):
+                _add(clean_display_text(line))
+
+        for key in ("repo_url", "repo_dir", "command", "log_path", "selected_repo", "runnable_score", "proxy_status"):
             val = ev.data.get(key)
             if val:
-                lines.append(f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{clean_display_text(str(val))}")
+                _add(f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{clean_display_text(str(val))}")
+
         raw_lines = ev.data.get("log_lines")
         if isinstance(raw_lines, list):
             for line in raw_lines:
-                clean = clean_display_text(str(line))
-                if clean:
-                    lines.append(clean)
+                _add(clean_display_text(str(line)))
+
         if not lines and ev.message:
-            lines.append(clean_display_text(ev.message))
+            _add(clean_display_text(ev.message))
         return lines
 
     # ── Composer input ───────────────────────────────────────
@@ -989,18 +1014,36 @@ class PaperAgentApp(App):
         self._add_system("已请求取消。等待当前步骤完成...")
 
     def _heartbeat_running_task(self) -> None:
-        """Periodic check: show 'still running' if no progress for >12s."""
+        """Periodic check: show 'still running' in the current stage card."""
         if not self.agent_running:
             return
         now = time.monotonic()
         if self._last_progress_at and now - self._last_progress_at < 12:
             return
         elapsed = now - self._run_started_at if self._run_started_at else 0
-        stage_label = self._STAGE_LABELS_CN.get(self._current_stage or "", self._current_stage or "未知阶段")
-        self._add_system(
-            f"仍在运行：**{stage_label}** 已持续 {elapsed:.0f}s。"
-            "可能正在等待网络、克隆仓库、解析依赖或模型响应。"
-        )
+        stage_label = self._STAGE_LABELS_CN.get(self._current_stage or "", self._current_stage or "Pipeline")
+
+        text = f"仍在运行：{stage_label} 已持续 {elapsed:.0f}s，可能正在等待网络、克隆仓库、解析依赖或模型响应。"
+
+        card = self._get_active_tool_card(self._current_stage or "") if self._current_stage else None
+        if card is not None:
+            # Replace previous heartbeat in this card instead of stacking
+            clean = clean_display_text(text)
+            if clean.startswith("仍在运行："):
+                for i in range(len(card._log_lines) - 1, -1, -1):
+                    if card._log_lines[i].startswith("仍在运行："):
+                        card._log_lines[i] = clean
+                        card._refresh_display()
+                        break
+                else:
+                    card.append_log(text)
+                    card.update(status="running")
+            else:
+                card.append_log(text)
+                card.update(status="running")
+        else:
+            self._add_system(text)
+
         self._last_progress_at = now
 
     # ── Paper submission ─────────────────────────────────────

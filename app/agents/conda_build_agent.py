@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 
 from app.agents.docker_build_agent import classify_build_failure
 from app.agents.venv_build_agent import relax_requirement_line, pin_requirement_line
@@ -279,25 +281,98 @@ class CondaBuildAgent:
         step_name: str,
     ) -> subprocess.CompletedProcess[str]:
         remaining = max(1, int(deadline - time.monotonic()))
+        display_cmd = _display_argv(argv)
         log_parts.append(f"\n$ {' '.join(argv)}")
-        emit_progress("Build conda env", step_name, detail=_display_argv(argv))
-        proc = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=remaining,
+        emit_progress("Build conda env", step_name, detail=display_cmd)
+
+        proc = subprocess.Popen(
+            argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="ignore", bufsize=1,
         )
-        if proc.stdout:
-            log_parts.append(proc.stdout)
-        if proc.stderr:
-            log_parts.append(proc.stderr)
-        log_parts.append(f"[exit_code] {proc.returncode} ({step_name})")
-        if proc.returncode == 0:
-            emit_progress("Build conda env", f"{step_name} done", level="success")
-        else:
-            emit_progress("Build conda env", f"{step_name} failed", level="warning", detail=f"exit {proc.returncode}")
-        return proc
+        q: Queue[tuple[str, str]] = Queue()
+        if proc.stdout is not None:
+            Thread(target=_enqueue, args=(proc.stdout, q, "stdout"), daemon=True).start()
+        if proc.stderr is not None:
+            Thread(target=_enqueue, args=(proc.stderr, q, "stderr"), daemon=True).start()
+
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        last_emit = 0.0
+        pending: list[str] = []
+
+        try:
+            while True:
+                now = time.monotonic()
+                if now > deadline:
+                    proc.kill()
+                    raise subprocess.TimeoutExpired(argv, remaining)
+
+                got = False
+                while True:
+                    try:
+                        stream, raw = q.get_nowait()
+                    except Empty:
+                        break
+                    got = True
+                    if stream == "stdout":
+                        stdout_parts.append(raw)
+                    else:
+                        stderr_parts.append(raw)
+                    clean = _clean_cli(raw)
+                    if clean:
+                        pending.append(clean)
+
+                if pending and now - last_emit >= 0.5:
+                    last_emit = now
+                    emit_progress("Build conda env", step_name,
+                                  detail="\n".join(pending[-5:]),
+                                  log_lines=pending[-5:])
+                    pending.clear()
+
+                if proc.poll() is not None:
+                    break
+                if not got:
+                    time.sleep(0.05)
+
+            # Drain
+            while True:
+                try:
+                    stream, raw = q.get_nowait()
+                except Empty:
+                    break
+                if stream == "stdout":
+                    stdout_parts.append(raw)
+                else:
+                    stderr_parts.append(raw)
+                clean = _clean_cli(raw)
+                if clean:
+                    pending.append(clean)
+
+            if pending:
+                emit_progress("Build conda env", step_name,
+                              detail="\n".join(pending[-5:]),
+                              log_lines=pending[-5:])
+
+            stdout = "".join(stdout_parts)
+            stderr = "".join(stderr_parts)
+            if stdout:
+                log_parts.append(stdout)
+            if stderr:
+                log_parts.append(stderr)
+            log_parts.append(f"[exit_code] {proc.returncode} ({step_name})")
+            if proc.returncode == 0:
+                emit_progress("Build conda env", f"{step_name} done", level="success")
+            else:
+                emit_progress("Build conda env", f"{step_name} failed", level="warning",
+                              detail=f"exit {proc.returncode}")
+            return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
 
 
 class BuildStepError(Exception):
@@ -312,6 +387,24 @@ def _display_argv(argv: list[str], max_len: int = 140) -> str:
     if len(display) <= max_len:
         return display
     return display[: max_len - 3] + "..."
+
+
+def _enqueue(pipe, q: Queue[tuple[str, str]], stream_name: str) -> None:
+    try:
+        for line in iter(pipe.readline, ""):
+            if line:
+                q.put((stream_name, line))
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _clean_cli(line: str) -> str:
+    """Handle carriage-return overwrites and strip whitespace."""
+    line = line.replace("\r", "\n").splitlines()[-1] if line else ""
+    return line.strip()
 
 
 def _repo_needs_audio_runtime_helper(repo_dir: Path) -> bool:
