@@ -16,6 +16,7 @@ After EVERY code change, you MUST:
    ```
 2. **Commit** with a concise message describing the fix/feature.
 3. **Push** to `git@github.com:Winter-And-You-Gone/paperReproductAgent.git` (SSH).
+4. **Report** after every push: state the commit hash range, branch, and brief summary of what was pushed.
 
 No exceptions. Never leave changes uncommitted or unpushed.
 
