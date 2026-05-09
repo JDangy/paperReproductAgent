@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.core.file_utils import save_json
 from app.core.progress import emit_progress
+from app.core.cancellation import PipelineCancelled
 from app.core.state import TaskState, RepoEvaluation
 from app.tools.llm import call_llm_json
 from app.tools.repo_tool import (
@@ -109,6 +110,10 @@ class RepoEvaluationAgent:
                 repo_dir=str(repo_dir),
             )
 
+        except PipelineCancelled:
+            state.status = "cancelled"
+            emit_progress("Evaluate repo", "cancelled", level="warning", phase="fail")
+            raise
         except Exception as e:
             state.errors.append({"agent": "RepoEvaluationAgent", "error": str(e)})
             state.status = "failed"

@@ -4,26 +4,21 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.events import MouseDown
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
 
-from .. import theme as T
 from ..display_utils import clean_display_text
 
-# ── Chinese labels ────────────────────────────────────────
+# ── Labels ────────────────────────────────────────────────
 
 _STAGE_CN: dict[str, str] = {
-    "Ingest paper": "解析论文",
-    "Understand paper": "理解论文",
-    "Search GitHub": "搜索 GitHub",
-    "Evaluate repo": "评估仓库",
-    "Build conda env": "构建 conda 环境",
-    "Build virtualenv": "构建虚拟环境",
-    "Build Docker image": "构建 Docker 镜像",
-    "Run smoke command": "运行冒烟测试",
-    "Run benchmark reproduction": "运行 benchmark 复现",
-    "Run simple reproduction": "运行轻量复现",
+    "Ingest paper": "解析论文", "Understand paper": "理解论文",
+    "Search GitHub": "搜索 GitHub", "Evaluate repo": "评估仓库",
+    "Build conda env": "构建 conda 环境", "Build virtualenv": "构建虚拟环境",
+    "Build Docker image": "构建 Docker 镜像", "Run smoke command": "运行冒烟测试",
+    "Run benchmark reproduction": "运行 benchmark 复现", "Run simple reproduction": "运行轻量复现",
     "Write report": "生成报告",
 }
 
@@ -39,25 +34,43 @@ _ICON_MAP: dict[str, str] = {
 
 
 class ToolCard(Widget):
-    """A single pipeline stage card: click to expand/collapse."""
+    """A single pipeline stage card — status-colored left border, dark background, click to expand."""
 
     can_focus = True
 
     DEFAULT_CSS = """
     ToolCard {
-        margin: 0 0 1 1;
+        margin: 0 0 1 0;
+        padding: 0 1;
         height: auto;
+        background: #181825;
+        border-left: thick #585b70;
+        border-bottom: solid #313244;
     }
-    ToolCard:focus {
-        border: dashed $primary;
+    ToolCard.running {
+        border-left: thick #8be9fd;
+    }
+    ToolCard.success {
+        border-left: thick #50fa7b;
+    }
+    ToolCard.failed {
+        border-left: thick #ff5555;
+    }
+    ToolCard.skipped,
+    ToolCard.cancelled,
+    ToolCard.disabled {
+        border-left: thick #ffb86c;
     }
     ToolCard .tool-header {
         color: $text;
         height: 1;
+        padding: 0 0;
     }
     ToolCard .tool-body {
         color: $text-muted;
         margin-left: 2;
+        height: auto;
+        padding: 0 0 1 0;
     }
     """
 
@@ -89,7 +102,6 @@ class ToolCard(Widget):
         self._duration = duration
         self._attempts = attempts
 
-        # Running → expanded by default; finished → collapsed
         self._collapsed = status != "running"
         self._user_toggled = False
         self._log_lines: list[str] = []
@@ -108,9 +120,6 @@ class ToolCard(Widget):
 
     @property
     def icon(self) -> str: return _ICON_MAP.get(self._status, "●")
-
-    @property
-    def color(self) -> str: return T.stage_color(self._status)
 
     def latest_log(self) -> str:
         return self._log_lines[-1] if self._log_lines else self._message or ""
@@ -140,7 +149,8 @@ class ToolCard(Widget):
     def action_toggle_collapsed(self) -> None:
         self.toggle_collapsed()
 
-    def on_click(self) -> None:
+    def on_mouse_down(self, event: MouseDown) -> None:
+        event.stop()
         self.toggle_collapsed()
 
     # ── Update ──────────────────────────────────────────────
@@ -172,14 +182,21 @@ class ToolCard(Widget):
         if append_log is not None:
             self.append_log(append_log)
 
-        # Auto-collapse on finish if user hasn't manually toggled
         if not self._user_toggled and status is not None and status != old_status:
             if status == "running":
                 self._collapsed = False
             elif status in ("success", "failed", "skipped", "cancelled", "disabled"):
                 self._collapsed = True
 
+        self._sync_status_class()
         self._refresh_display()
+
+    def _sync_status_class(self) -> None:
+        for cls in ("queued", "running", "success", "failed", "skipped", "cancelled", "disabled"):
+            self.remove_class(cls)
+        self.add_class(self._status if self._status in {
+            "queued", "running", "success", "failed", "skipped", "cancelled", "disabled"
+        } else "running")
 
     # ── Display ─────────────────────────────────────────────
 
@@ -192,19 +209,17 @@ class ToolCard(Widget):
         return f"{d:.1f}s"
 
     def _refresh_display(self) -> None:
-        icon = self.icon
-        color = self.color
         dur = self._format_duration()
         dur_str = f" {dur}" if dur else ""
         latest = self.latest_log()
-        if len(latest) > 70:
-            latest = latest[:67] + "..."
+        if len(latest) > 80:
+            latest = latest[:77] + "..."
         latest_str = f" · {latest}" if latest else ""
         collapse_icon = "▾" if not self._collapsed else "▸"
 
         header_text = (
-            f"[bold {color}]{collapse_icon} {icon} {self.stage_label}[/] "
-            f"[dim {color}]{self.status_label}{dur_str}{latest_str}[/]"
+            f"[bold]{collapse_icon} {self.icon} {self.stage_label}[/] "
+            f"[dim]{self.status_label}{dur_str}{latest_str}[/]"
         )
         try:
             self.query_one(".tool-header", Static).update(header_text)
@@ -234,4 +249,5 @@ class ToolCard(Widget):
         yield body
 
     def on_mount(self) -> None:
+        self._sync_status_class()
         self._refresh_display()
