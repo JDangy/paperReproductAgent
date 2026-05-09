@@ -105,6 +105,7 @@ class ToolCard(Widget):
         self._collapsed = status != "running"
         self._user_toggled = False
         self._log_lines: list[str] = []
+        self._keyed_log_indices: dict[str, int] = {}
         self._max_expanded = 5
 
     # ── Properties ──────────────────────────────────────────
@@ -133,11 +134,46 @@ class ToolCard(Widget):
         clean = clean_display_text(line)
         if not clean:
             return
+
+        # Heartbeat: replace instead of stacking
+        if clean.startswith("仍在运行："):
+            self.upsert_log("heartbeat", clean)
+            return
+
         if self._log_lines and clean == self._log_lines[-1]:
             return
         self._log_lines.append(clean)
         if len(self._log_lines) > 200:
             self._log_lines = self._log_lines[-200:]
+            self._keyed_log_indices.clear()
+
+    def upsert_log(self, key: str, line: str) -> None:
+        """Replace or insert a log line by key. Same key → same slot."""
+        clean = clean_display_text(line)
+        if not clean:
+            return
+
+        if key in self._keyed_log_indices:
+            idx = self._keyed_log_indices[key]
+            if 0 <= idx < len(self._log_lines):
+                self._log_lines[idx] = clean
+            else:
+                self._keyed_log_indices.pop(key, None)
+                self._log_lines.append(clean)
+                self._keyed_log_indices[key] = len(self._log_lines) - 1
+        else:
+            self._log_lines.append(clean)
+            self._keyed_log_indices[key] = len(self._log_lines) - 1
+
+        if len(self._log_lines) > 200:
+            drop = len(self._log_lines) - 200
+            self._log_lines = self._log_lines[-200:]
+            new_map: dict[str, int] = {}
+            for k, old_idx in self._keyed_log_indices.items():
+                new_idx = old_idx - drop
+                if 0 <= new_idx < len(self._log_lines):
+                    new_map[k] = new_idx
+            self._keyed_log_indices = new_map
 
     # ── Collapse / expand ──────────────────────────────────
 
@@ -163,6 +199,7 @@ class ToolCard(Widget):
         duration: float | None = None,
         attempts: int | None = None,
         append_log: str | None = None,
+        replace_log_key: str | None = None,
     ) -> None:
         old_status = self._status
 
@@ -180,7 +217,10 @@ class ToolCard(Widget):
         if attempts is not None:
             self._attempts = attempts
         if append_log is not None:
-            self.append_log(append_log)
+            if replace_log_key:
+                self.upsert_log(replace_log_key, append_log)
+            else:
+                self.append_log(append_log)
 
         if not self._user_toggled and status is not None and status != old_status:
             if status == "running":

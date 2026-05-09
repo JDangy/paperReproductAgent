@@ -557,10 +557,12 @@ def tui(
         raise typer.Exit(1)
 
     from app.tui import run_tui
+    from app.core.paths import resolve_workspace_path
 
+    ws = str(resolve_workspace_path(workspace, explicit=False))
     run_tui(
         _run_pipeline,
-        workspace=workspace,
+        workspace=ws,
         backend=backend,
         timeout_minutes=timeout_minutes,
         max_repair_attempts=max_repair_attempts,

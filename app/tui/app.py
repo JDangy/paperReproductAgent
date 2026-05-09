@@ -488,15 +488,19 @@ class PaperAgentApp(App):
 
         # Build log lines from progress data
         log_lines = self._build_progress_log_lines(ev)
+        progress_kind = ev.data.get("progress_kind")
 
         # Get/create tool card and append logs
         card = self._get_or_create_tool_card(name, ev.message)
         for line in log_lines:
-            card.append_log(line)
+            if progress_kind:
+                card.upsert_log(str(progress_kind), line)
+            else:
+                card.append_log(line)
         card.update(
             status=status,
             message=ev.message,
-            detail=None,  # detail already fed into log_lines
+            detail=None,
             duration=duration,
         )
 
@@ -525,31 +529,25 @@ class PaperAgentApp(App):
     def _build_progress_log_lines(self, ev: ProgressEvent) -> list[str]:
         """Extract log lines from a progress event for the ToolCard buffer. Deduplicates progress bar text."""
         lines: list[str] = []
-        seen: set[str] = set()
 
+        # Progress-specific: single bar+text line, skip redundant fields
+        bar = ev.data.get("progress_bar")
+        ptext = ev.data.get("progress_text")
+        progress_kind = ev.data.get("progress_kind")
+
+        if progress_kind and (bar or ptext):
+            if bar and ptext:
+                return [f"{bar} {clean_display_text(str(ptext))}"]
+            elif ptext:
+                return [clean_display_text(str(ptext))]
+            elif bar:
+                return [str(bar)]
+
+        seen: set[str] = set()
         def _add(clean: str) -> None:
             if clean and clean not in seen:
                 seen.add(clean)
                 lines.append(clean)
-
-        # Progress-specific: single bar+text line, skip redundant fields
-        bar = ev.data.get("progress_bar")
-        pct = ev.data.get("progress_percent")
-        ptext = ev.data.get("progress_text")
-
-        if bar or ptext:
-            if bar and ptext:
-                _add(f"{bar} {clean_display_text(str(ptext))}")
-            elif ptext:
-                _add(clean_display_text(str(ptext)))
-            elif bar:
-                _add(str(bar))
-            # Skip clone_progress when we already have progress_bar/progress_text
-        else:
-            # Only use clone_progress if no progress_bar/progress_text
-            cp = ev.data.get("clone_progress")
-            if cp:
-                _add(clean_display_text(str(cp)))
 
         if ev.detail:
             for line in ev.detail.splitlines():
