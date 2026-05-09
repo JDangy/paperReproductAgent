@@ -599,6 +599,7 @@ class PaperAgentApp(App):
             "logs": self._cmd_logs,
             "cancel": self._cmd_cancel,
             "sessions": self._cmd_sessions,
+            "session": self._cmd_sessions,
             "resume": self._cmd_resume,
             "quit": self._cmd_quit,
             "exit": self._cmd_quit,
