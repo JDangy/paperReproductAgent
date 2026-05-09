@@ -97,12 +97,34 @@ def test_fuzzy_subsequence_score_no_match():
     assert score is None
 
 
-def test_completion_descriptions_are_chinese():
-    items = complete_command("/exit")
-    assert len(items) > 0
-    exit_item = [i for i in items if i.command == "exit"][0]
-    assert "退出" in exit_item.description
-    assert "Exit" not in exit_item.description
+def test_command_descriptions_are_chinese():
+    from app.tui.commands import COMMANDS
+    assert COMMANDS["exit"].description == "退出 TUI"
+    assert COMMANDS["backend"].description == "设置执行后端"
+    assert COMMANDS["run"].description == "执行复现流水线"
+    assert COMMANDS["exit"].category == "系统"
+    assert COMMANDS["run"].category == "运行"
+
+
+def test_help_text_no_rich_markup():
+    """Build help text and verify no Rich markup leaks through."""
+    from app.tui.app import _HELP_CATEGORIES
+    from app.tui.commands import COMMANDS
+    lines = ["## 可用命令", ""]
+    for cat_name, cmds in _HELP_CATEGORIES.items():
+        lines.append(f"### {cat_name}")
+        for name in cmds:
+            meta = COMMANDS[name]
+            arg_str = f" {meta.display_args or meta.args}" if (meta.display_args or meta.args) else ""
+            lines.append(f"- `/{name}{arg_str}` — {meta.description}")
+        lines.append("")
+    text = "\n".join(lines)
+    assert "[bold" not in text
+    assert "[/" not in text
+    assert "可用命令" in text
+    assert "输入" in text
+    assert "运行" in text
+    assert "/exit" in text
 
 
 def test_completion_has_required_args():

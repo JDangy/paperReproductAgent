@@ -1,54 +1,52 @@
 from __future__ import annotations
 
-"""Help panel showing available slash commands."""
+"""Help panel — fully in Chinese, no Rich markup."""
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 
-from .. import theme as T
-
 _COMMAND_HELP: dict[str, list[tuple[str, str]]] = {
-    "Input": [
-        ("/input <path>", "Set local PDF path (use @ for local files)"),
-        ("/repo <url>", "Set GitHub repository URL directly"),
-        ("/repo-dir <path>", "Set local repository directory"),
+    "输入": [
+        ("/input <PDF路径>", "设置本地论文 PDF 路径"),
+        ("/repo <仓库URL>", "直接指定 GitHub 仓库地址"),
+        ("/repo-dir <本地仓库目录>", "指定本地代码仓库目录"),
     ],
-    "Run": [
-        ("/run", "Execute the full reproduction pipeline"),
-        ("/cancel", "Cancel current pipeline run"),
-        ("/backend <type>", "Set backend: none|local|venv|conda|docker"),
-        ("/workspace <path>", "Set output workspace directory"),
-        ("/timeout <minutes>", "Set timeout for pipeline steps"),
-        ("/repairs <n>", "Set max dependency repair attempts"),
+    "运行": [
+        ("/run", "执行复现流水线"),
+        ("/cancel", "取消当前任务"),
+        ("/backend [后端]", "设置后端：none | local | venv | conda | docker"),
+        ("/workspace <目录>", "设置输出工作目录"),
+        ("/timeout <分钟数>", "设置步骤超时时间"),
+        ("/repairs <次数>", "设置最大依赖修复次数"),
     ],
-    "View": [
-        ("/status", "Show current session and pipeline status"),
-        ("/report", "Show reproduction report path and summary"),
-        ("/logs <type>", "View logs: env|conda|venv|build|smoke|benchmark|reproduction|stdout|stderr"),
-        ("/artifact", "Show current task directory and output paths"),
-        ("/open-report", "Print report file path"),
+    "查看": [
+        ("/status", "查看当前任务状态"),
+        ("/report", "查看复现报告路径和摘要"),
+        ("/logs <日志类型>", "查看日志：env | smoke | benchmark | reproduction"),
+        ("/artifact", "显示当前任务产物路径"),
+        ("/open-report", "显示报告文件路径"),
     ],
-    "Mode": [
-        ("/plan", "Switch to PLAN mode (no execution)"),
-        ("/act", "Switch to ACT mode (execute pipeline)"),
-        ("/panel <name>", "Show panel: session|pipeline|help|artifacts|none"),
-        ("/mode", "Display current PLAN/ACT mode"),
+    "模式": [
+        ("/plan", "切换到计划模式（不执行）"),
+        ("/act", "切换到执行模式"),
+        ("/panel <面板>", "切换右侧面板：session | pipeline | help | artifacts"),
+        ("/mode", "显示当前 PLAN / ACT 模式"),
     ],
-    "Session": [
-        ("/sessions", "List saved sessions"),
-        ("/resume <id>", "Resume a previous session"),
-        ("/reset", "Clear current session input (no disk deletion)"),
-        ("/clear", "Clear message timeline"),
+    "会话": [
+        ("/sessions", "列出历史会话"),
+        ("/resume <会话ID>", "恢复历史会话"),
+        ("/reset", "清空当前会话输入，不删除磁盘文件"),
+        ("/clear", "清空消息时间线"),
     ],
-    "System": [
-        ("/help", "Show this help"),
-        ("!shell <command>", "Run shell command (confirmation required)"),
-        ("/quit | /exit", "Exit the TUI"),
-        ("ctrl+c", "Quit immediately"),
-        ("ctrl+p", "Toggle PLAN/ACT mode"),
-        ("ctrl+l", "Clear message timeline"),
+    "系统": [
+        ("/help", "显示帮助"),
+        ("!shell <命令>", "执行 shell 命令（需确认）"),
+        ("/quit 或 /exit", "退出 TUI"),
+        ("Ctrl+P", "切换 PLAN / ACT 模式"),
+        ("Ctrl+L", "清空消息时间线"),
+        ("Ctrl+C", "强制退出"),
     ],
 }
 
@@ -77,7 +75,7 @@ class HelpPanel(Widget):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll():
-            yield Static("[bold]Commands[/]", id="help-title")
+            yield Static("[bold]命令帮助[/]", id="help-title")
             yield Static("", id="help-body")
 
     def on_mount(self) -> None:
@@ -86,10 +84,11 @@ class HelpPanel(Widget):
     def _build(self) -> None:
         lines: list[str] = []
         for category, cmds in _COMMAND_HELP.items():
-            lines.append(f"\n[bold {T.INFO_BORDER}]{category}[/]")
+            lines.append(f"\n{category}")
+            lines.append("-" * len(category))
             for cmd, desc in cmds:
-                lines.append(f"  [{T.GREEN}]{cmd}[/]")
-                lines.append(f"    [{T.FG_DIM}]{desc}[/]")
+                lines.append(f"  {cmd}")
+                lines.append(f"    {desc}")
         content = "\n".join(lines)
         try:
             self.query_one("#help-body", Static).update(content)

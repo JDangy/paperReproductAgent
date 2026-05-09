@@ -2,7 +2,8 @@ from __future__ import annotations
 
 """Tests for StageView and pipeline panel logic."""
 
-from app.tui.panels.pipeline_panel import StageView, PipelinePanel, PIPELINE_STAGES
+from app.tui.panels.pipeline_panel import StageView, PipelinePanel, PIPELINE_STAGES, STAGE_LABELS_CN, STATUS_LABELS_CN
+from app.tui.panels.session_panel import _mode_cn, _status_cn
 
 
 def test_stage_view_default_status_queued():
@@ -70,3 +71,32 @@ def test_pipeline_panel_attempt_count_on_rerun():
 def test_stage_view_duration():
     sv = StageView(name="Test", status="success", duration=3.5)
     assert sv.duration == 3.5
+
+
+def test_stage_labels_cn():
+    assert STAGE_LABELS_CN["Ingest paper"] == "解析论文"
+    assert STAGE_LABELS_CN["Write report"] == "生成报告"
+    assert STAGE_LABELS_CN["Build conda env"] == "构建 conda 环境"
+    assert STAGE_LABELS_CN["Run smoke command"] == "运行冒烟测试"
+
+
+def test_status_labels_cn():
+    assert STATUS_LABELS_CN["queued"] == "等待中"
+    assert STATUS_LABELS_CN["running"] == "运行中"
+    assert STATUS_LABELS_CN["disabled"] == "未启用"
+
+
+def test_stage_view_label_cn():
+    sv = StageView(name="Ingest paper")
+    assert sv.label_cn == "解析论文"
+
+
+def test_mode_cn():
+    assert _mode_cn("act") == "执行"
+    assert _mode_cn("plan") == "计划"
+
+
+def test_status_cn():
+    assert _status_cn("draft") == "草稿"
+    assert _status_cn("running") == "运行中"
+    assert _status_cn("failed") == "失败"

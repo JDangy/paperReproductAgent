@@ -97,6 +97,11 @@ class PaperAgentApp(App):
         width: 34;
         height: 1fr;
     }
+    #bottom-spacer {
+        height: 1;
+        min-height: 1;
+        background: $surface;
+    }
     """
 
     TITLE = "Paper Reproduct Agent"
@@ -171,6 +176,7 @@ class PaperAgentApp(App):
                 yield PipelinePanel(backend=self.session.backend)
 
         yield Composer(mode="act")
+        yield Static("", id="bottom-spacer")
         yield StatusBar()
 
     def on_mount(self) -> None:
@@ -538,17 +544,17 @@ class PaperAgentApp(App):
 
     def _cmd_help(self, args: str) -> None:
         cat = args.strip() if args else ""
-        lines: list[str] = []
+        lines: list[str] = ["## 可用命令", ""]
         shown = False
         for cat_name, cmds in _HELP_CATEGORIES.items():
-            if cat and cat_name.lower() != cat.lower():
+            if cat and cat_name != cat:
                 continue
             shown = True
-            lines.append(f"**[bold {T.INFO_BORDER}]{cat_name}[/]**")
+            lines.append(f"### {cat_name}")
             for name in cmds:
                 meta = COMMANDS[name]
                 arg_str = f" {meta.display_args or meta.args}" if (meta.display_args or meta.args) else ""
-                lines.append(f"  `/{name}{arg_str}` — {meta.description}")
+                lines.append(f"- `/{name}{arg_str}` — {meta.description}")
             lines.append("")
         if not shown and cat:
             cats = ", ".join(_HELP_CATEGORIES.keys())

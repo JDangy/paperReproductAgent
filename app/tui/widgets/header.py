@@ -11,6 +11,14 @@ from ..logo import render_logo, render_compact_logo, SUBTITLE
 from .. import theme as T
 
 
+def _status_cn_short(status: str) -> str:
+    mapping = {
+        "draft": "草稿", "running": "运行中", "success": "成功",
+        "failed": "失败", "cancelled": "已取消", "completed": "已完成",
+    }
+    return mapping.get(status.lower(), status)
+
+
 def join_rich_lines(lines: list[RichText]) -> RichText:
     """Join a list of Rich Text lines with newlines, preserving style spans."""
     result = RichText()
@@ -109,13 +117,15 @@ class HeaderLogo(Widget):
         self._refresh_summary()
 
     def _refresh_summary(self) -> None:
-        mode_color = T.PURPLE if self.mode.upper() == "PLAN" else T.GREEN
+        mode_c = T.PURPLE if self.mode.upper() == "PLAN" else T.GREEN
         status_c = T.status_color(self.status)
+        mode_label = "计划" if self.mode.upper() == "PLAN" else "执行"
+        status_label = _status_cn_short(self.status)
         text = (
-            f"[{T.FG_DIM}]session:[/] [{T.INFO_BORDER}]{self.session_id[:8]}[/]  "
-            f"[{T.FG_DIM}]mode:[/] [bold {mode_color}]{self.mode.upper()}[/]  "
-            f"[{T.FG_DIM}]backend:[/] [{T.INFO_BORDER}]{self.backend}[/]  "
-            f"[{T.FG_DIM}]status:[/] [{status_c}]{self.status}[/]"
+            f"[{T.FG_DIM}]会话：[/] [{T.INFO_BORDER}]{self.session_id[:8]}[/]  "
+            f"[{T.FG_DIM}]模式：[/] [bold {mode_c}]{mode_label}[/]  "
+            f"[{T.FG_DIM}]后端：[/] [{T.INFO_BORDER}]{self.backend}[/]  "
+            f"[{T.FG_DIM}]状态：[/] [{status_c}]{status_label}[/]"
         )
         try:
             self.query_one("#summary-area", Static).update(text)
