@@ -1143,7 +1143,22 @@ class PaperAgentApp(App):
             self._add_error(f"恢复失败：{e}")
 
     def _cmd_quit(self, _: str) -> None:
+        self._cleanup_timers()
         self.exit()
+
+    def action_quit(self) -> None:
+        """Override built-in quit to clean up timers first."""
+        self._cleanup_timers()
+        super().action_quit()
+
+    def _cleanup_timers(self) -> None:
+        """Stop heartbeat timer before exit to avoid executor join timeout."""
+        if self._heartbeat_timer is not None:
+            try:
+                self._heartbeat_timer.stop()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._heartbeat_timer = None
 
     # ── Bindings ──────────────────────────────────────────────
 
