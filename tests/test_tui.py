@@ -32,7 +32,7 @@ def test_new_tui_parse_empty():
 
 
 def test_new_tui_parse_unknown_slash():
-    assert new_parse_command("/unknown blah") == ("message", "/unknown blah")
+    assert new_parse_command("/unknown blah") == ("unknown_command", "/unknown blah")
 
 
 def test_new_tui_parse_known_commands():

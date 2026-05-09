@@ -23,10 +23,20 @@ def test_parse_slash_command_with_args():
     assert args == "conda"
 
 
-def test_parse_unknown_slash_falls_back_to_message():
+def test_parse_unknown_slash_returns_unknown_command():
     cmd, args = parse_command("/unknown blah")
-    assert cmd == "message"
+    assert cmd == "unknown_command"
     assert "/unknown blah" in args
+
+
+def test_parse_ex_is_unknown():
+    cmd, args = parse_command("/ex")
+    assert cmd == "unknown_command"
+
+
+def test_plain_path_still_message():
+    cmd, args = parse_command("C:/paper.pdf")
+    assert cmd == "message"
 
 
 def test_parse_shell_bang():

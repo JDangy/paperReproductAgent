@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Composer with slash-command completion popup."""
+"""Composer with slash-command completion popup — Enter accepts and may execute."""
 
 from textual.message import Message
 from textual.widget import Widget
@@ -15,14 +15,15 @@ class Composer(Widget):
 
     DEFAULT_CSS = """
     Composer {
-        height: 4;
-        min-height: 4;
-        padding: 0 1 1 1;
+        height: 5;
+        min-height: 5;
+        padding: 1 1 1 1;
         background: $surface;
         border-top: solid $primary-darken-2;
     }
     Composer.has-completion {
-        height: 8;
+        height: 9;
+        min-height: 9;
     }
     Composer Input {
         height: 3;
@@ -59,7 +60,6 @@ class Composer(Widget):
         self._default = placeholder or "输入 PDF 路径，或 /help 查看命令"
         self._placeholder = self._default
 
-        # Completion state
         self._completion_items: list[CompletionItem] = []
         self._completion_index: int = 0
         self._completion_visible: bool = False
@@ -74,10 +74,18 @@ class Composer(Widget):
     # ── Input handling ──────────────────────────────────────
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # If completion is visible, accept the selected item
+        if self.has_completion():
+            accepted, submit_text = self._accept_completion(submit_if_complete=True)
+            if accepted:
+                if submit_text:
+                    event.input.value = ""
+                    self.post_message(self.Submitted(submit_text))
+                return
+
         value = event.value.strip()
         if not value:
             return
-        # Don't auto-accept completion on Enter
         event.input.value = ""
         self._hide_completion()
         self.post_message(self.Submitted(value))
@@ -117,6 +125,13 @@ class Composer(Widget):
     def hide_completion(self) -> None:
         self._hide_completion()
 
+    def _current_item(self) -> CompletionItem | None:
+        if not self._completion_items:
+            return None
+        if 0 <= self._completion_index < len(self._completion_items):
+            return self._completion_items[self._completion_index]
+        return None
+
     def _refresh_completion_display(self) -> None:
         try:
             popup = self.query_one("#completion-popup", Static)
@@ -133,10 +148,10 @@ class Composer(Widget):
         for i, item in enumerate(self._completion_items):
             prefix = ">" if i == self._completion_index else " "
             color = T.GREEN if i == self._completion_index else T.FG_DIM
-            arg_part = f" {item.args}" if item.args else ""
+            arg_part = f" {item.display_args or item.args}" if (item.display_args or item.args) else ""
+            desc = item.description[:50]  # truncate long descriptions
             lines.append(
-                f"[{color}]{prefix} /{item.command}{arg_part}[/]  "
-                f"[{T.FG_DIM}]({item.category}) {item.description}[/]"
+                f"[{color}]{prefix} /{item.command}{arg_part:<20}[/] [{T.FG_DIM}]{desc}[/]"
             )
         popup.update("\n".join(lines))
 
@@ -145,25 +160,38 @@ class Composer(Widget):
     def has_completion(self) -> bool:
         return self._completion_visible and len(self._completion_items) > 0
 
-    def accept_completion(self) -> bool:
-        """Accept the currently highlighted completion.  Returns True if accepted."""
-        if not self.has_completion():
-            return False
-        if 0 <= self._completion_index < len(self._completion_items):
-            item = self._completion_items[self._completion_index]
-            text = item.insert_text
-            try:
-                inp = self.query_one("#composer-input", Input)
-                inp.value = text
-                inp.action_end()
-                inp.focus()
-            except Exception:
-                pass
+    def _accept_completion(self, submit_if_complete: bool = False) -> tuple[bool, str | None]:
+        """Accept current completion.
+
+        Returns (accepted, submit_text).
+        - accepted: whether a completion was applied
+        - submit_text: if non-None, post this as a Submitted message
+        """
+        item = self._current_item()
+        if item is None:
+            return False, None
+
+        try:
+            inp = self.query_one("#composer-input", Input)
+            inp.value = item.insert_text
+            inp.action_end()
+            inp.focus()
+        except Exception:
+            pass
+
         self._hide_completion()
-        return True
+
+        if submit_if_complete and not item.has_any_args:
+            return True, item.insert_text.strip()
+
+        return True, None
+
+    def accept_completion(self) -> bool:
+        """Tab: accept completion without executing."""
+        accepted, _ = self._accept_completion(submit_if_complete=False)
+        return accepted
 
     def move_completion(self, delta: int) -> bool:
-        """Move highlight up (-1) or down (+1).  Returns True if moved."""
         if not self.has_completion():
             return False
         self._completion_index += delta

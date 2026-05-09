@@ -28,6 +28,17 @@ PipelineRunner = Callable[..., TaskState]
 
 SLASH_COMMANDS_SET: set[str] = set(COMMANDS.keys())
 
+# Help categories: grouped command names in display order
+_HELP_CATEGORIES: dict[str, list[str]] = {
+    "输入": ["input", "repo", "repo-dir"],
+    "运行": ["backend", "workspace", "timeout", "repairs", "run", "cancel"],
+    "查看": ["status", "logs", "report", "artifact", "open-report"],
+    "模式": ["plan", "act", "mode"],
+    "界面": ["panel"],
+    "会话": ["sessions", "resume", "reset"],
+    "系统": ["help", "clear", "quit", "exit"],
+}
+
 
 def parse_command(line: str) -> tuple[str, str]:
     stripped = line.strip()
@@ -41,7 +52,10 @@ def parse_command(line: str) -> tuple[str, str]:
     command = parts[0].lower()
     args = parts[1] if len(parts) > 1 else ""
     if command not in SLASH_COMMANDS_SET:
-        return "message", stripped
+        # If it looks like a file path (contains /), treat as message
+        if "/" in stripped[1:] or "." in command:
+            return "message", stripped
+        return "unknown_command", stripped
     return command, args
 
 
@@ -151,18 +165,13 @@ class PaperAgentApp(App):
         )
 
         with Horizontal(id="main-content"):
-            # Left: Session panel
             yield SessionPanel(classes="left-panel")
-
-            # Center: Timeline
             yield MessageTimeline(id="timeline-area")
-
-            # Right: dynamic panel container
             with Container(id="right-panel"):
                 yield PipelinePanel(backend=self.session.backend)
 
-        yield StatusBar()
         yield Composer(mode="act")
+        yield StatusBar()
 
     def on_mount(self) -> None:
         self._header = self.query_one(HeaderLogo)
@@ -485,6 +494,9 @@ class PaperAgentApp(App):
         if command == "message":
             self._submit_paper(args)
             return
+        if command == "unknown_command":
+            self._handle_unknown_command(args)
+            return
 
         handlers = {
             "help": self._cmd_help,
@@ -525,22 +537,44 @@ class PaperAgentApp(App):
     # ── Commands ──────────────────────────────────────────────
 
     def _cmd_help(self, args: str) -> None:
-        cat = args.strip().lower() if args else ""
-        lines = ["**可用命令**", ""]
+        cat = args.strip() if args else ""
+        lines: list[str] = []
         shown = False
-        for name, meta in COMMANDS.items():
-            if name == "exit":
-                continue
-            if cat and meta.category.lower().replace(" ", "-") != cat:
+        for cat_name, cmds in _HELP_CATEGORIES.items():
+            if cat and cat_name.lower() != cat.lower():
                 continue
             shown = True
-            arg_str = f" {meta.args}" if meta.args else ""
-            safe = " [safe]" if meta.safe_during_run else ""
-            lines.append(f"- `/{name}{arg_str}` — {meta.description}{safe}")
+            lines.append(f"**[bold {T.INFO_BORDER}]{cat_name}[/]**")
+            for name in cmds:
+                meta = COMMANDS[name]
+                arg_str = f" {meta.display_args or meta.args}" if (meta.display_args or meta.args) else ""
+                lines.append(f"  `/{name}{arg_str}` — {meta.description}")
+            lines.append("")
         if not shown and cat:
-            cats = sorted(set(m.category.lower().replace(" ", "-") for m in COMMANDS.values()))
-            lines.append(f"类别 '{cat}' 未找到。可用类别：{', '.join(cats)}")
+            cats = ", ".join(_HELP_CATEGORIES.keys())
+            lines.append(f"类别 '{cat}' 未找到。可用：{cats}")
+        if not lines:
+            lines = ["输入 `/help` 查看所有命令。"]
         self._add_assistant("\n".join(lines))
+
+    def _handle_unknown_command(self, text: str) -> None:
+        """Handle an unrecognized slash command."""
+        cmd_name = text.lstrip("/").split()[0].lower() if text.startswith("/") else text
+
+        # Try completion to suggest alternatives
+        from .completion import complete_command
+        suggestions = complete_command(f"/{cmd_name}", limit=4)
+        if suggestions:
+            sug_lines = [f"未知命令：`/{cmd_name}`", "", "你可能想输入："]
+            for s in suggestions:
+                arg_str = f" {s.display_args or s.args}" if (s.display_args or s.args) else ""
+                sug_lines.append(f"  `/{s.command}{arg_str}` — {s.description}")
+            self._add_assistant("\n".join(sug_lines))
+        else:
+            self._add_assistant(
+                f"未知命令：`/{cmd_name}`。\n"
+                "输入 `/help` 查看可用命令，或输入本地 PDF 路径开始复现。"
+            )
 
     def _cmd_clear(self, _: str) -> None:
         if self._timeline:

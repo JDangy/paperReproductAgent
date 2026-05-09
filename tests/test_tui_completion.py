@@ -17,9 +17,11 @@ def test_complete_slash_returns_commands():
     assert any(i.command == "report" for i in items)
 
 
-def test_prefix_exit():
-    items = complete_command("/e")
-    assert any(i.command == "exit" for i in items)
+def test_prefix_exit_first():
+    """prefix /ex should rank exit first"""
+    items = complete_command("/ex")
+    assert len(items) > 0
+    assert items[0].command == "exit"
 
 
 def test_prefix_backend():
@@ -93,3 +95,40 @@ def test_fuzzy_subsequence_score_gap():
 def test_fuzzy_subsequence_score_no_match():
     score = fuzzy_subsequence_score("xyz", "backend")
     assert score is None
+
+
+def test_completion_descriptions_are_chinese():
+    items = complete_command("/exit")
+    assert len(items) > 0
+    exit_item = [i for i in items if i.command == "exit"][0]
+    assert "退出" in exit_item.description
+    assert "Exit" not in exit_item.description
+
+
+def test_completion_has_required_args():
+    item = CompletionItem(command="timeout", args="<minutes>", description="设置超时", category="运行")
+    assert item.has_required_args
+    assert item.has_any_args
+
+    item2 = CompletionItem(command="run", args="", description="执行流水线", category="运行")
+    assert not item2.has_required_args
+    assert not item2.has_any_args
+
+    item3 = CompletionItem(command="backend", args="[none|...]", description="设置后端", category="运行")
+    assert not item3.has_required_args
+    assert item3.has_any_args
+
+
+def test_completion_prefix_ex_is_first():
+    items = complete_command("/ex")
+    assert items[0].command == "exit"
+
+
+def test_completion_prefix_ru_is_run():
+    items = complete_command("/ru")
+    assert items[0].command == "run"
+
+
+def test_normalize_preserves_chinese():
+    assert "退出" in normalize_query("退出")
+    assert normalize_query("退出 TUI") == "退出tui"
