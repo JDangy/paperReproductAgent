@@ -22,6 +22,7 @@ from app.runtime.session import Session, SessionStore, make_progress_bridge
 from .widgets import Composer, MessageTimeline, StatusBar, ToolCard, HeaderLogo
 from .panels import SessionPanel, PipelinePanel, StageView, HelpPanel, ArtifactPanel
 from .commands import COMMANDS, RUNNING_SAFE_COMMANDS
+from .display_utils import clean_display_text
 from . import theme as T
 
 PipelineRunner = Callable[..., TaskState]
@@ -497,15 +498,10 @@ class PaperAgentApp(App):
             duration=duration,
         )
 
-        # Only emit timeline message on start/finish/fail (summary only)
-        if ev.phase in ("start", "finish", "fail"):
+        # Only emit timeline message on fail (as error), not start/finish
+        if ev.phase == "fail":
             stage_label = self._STAGE_LABELS_CN.get(name, name)
-            phase_label = self._PHASE_LABELS_CN.get(ev.phase, "运行")
-            dur_str = f" ({duration:.1f}s)" if duration is not None else ""
-            self._timeline.add_tool(
-                f"**{stage_label}** · {phase_label}{dur_str}",
-                label=phase_label,
-            )
+            self._add_error(f"{stage_label} 失败：{ev.message}")
 
         # Update pipeline panel
         if self._pipeline_panel:
@@ -529,21 +525,21 @@ class PaperAgentApp(App):
         lines: list[str] = []
         if ev.detail:
             for line in ev.detail.splitlines():
-                clean = line.strip()
+                clean = clean_display_text(line)
                 if clean:
                     lines.append(clean)
         for key in ("repo_url", "repo_dir", "command", "log_path", "selected_repo", "runnable_score", "clone_progress", "proxy_status"):
             val = ev.data.get(key)
             if val:
-                lines.append(f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{val}")
+                lines.append(f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{clean_display_text(str(val))}")
         raw_lines = ev.data.get("log_lines")
         if isinstance(raw_lines, list):
             for line in raw_lines:
-                clean = str(line).strip()
+                clean = clean_display_text(str(line))
                 if clean:
                     lines.append(clean)
         if not lines and ev.message:
-            lines.append(ev.message)
+            lines.append(clean_display_text(ev.message))
         return lines
 
     # ── Composer input ───────────────────────────────────────

@@ -160,6 +160,15 @@ def _op_code_label(op_code: int) -> str:
     return "克隆中"
 
 
+def make_progress_bar(percent: int, width: int = 15) -> str:
+    """Return a text progress bar string like '[████░░░░] 50%'."""
+    if percent is None or percent < 0:
+        return ""
+    pct = min(percent, 100)
+    filled = int(width * pct / 100)
+    return "[" + "█" * filled + "░" * (width - filled) + f"] {pct:3d}%"
+
+
 def detect_git_proxy() -> dict[str, str]:
     """Detect proxy settings from environment and git global config."""
     proxies: dict[str, str] = {}
@@ -193,43 +202,78 @@ def mask_proxy_url(value: str) -> str:
 
 
 def _download_repo_zip(url: str, dest_dir: Path) -> Path:
-    """Download a GitHub repo as zip and extract it."""
-    # Convert github.com URL to zip download URL
-    # e.g. https://github.com/owner/repo -> https://github.com/owner/repo/archive/refs/heads/main.zip
+    """Download a GitHub repo as zip and extract it — with progress."""
     zip_url = url.rstrip("/")
     if zip_url.endswith(".git"):
         zip_url = zip_url[:-4]
 
-    # Try main branch first, then master
     for branch in ["main", "master"]:
         try:
             full_url = f"{zip_url}/archive/refs/heads/{branch}.zip"
             logger.info("Trying zip download: %s", full_url)
-            response = httpx.get(full_url, follow_redirects=True, timeout=120)
-            if response.status_code == 200:
-                zip_path = dest_dir.parent / (dest_dir.name + ".zip")
-                zip_path.parent.mkdir(parents=True, exist_ok=True)
-                zip_path.write_bytes(response.content)
+            emit_progress(
+                "Evaluate repo",
+                "正在下载仓库 ZIP",
+                detail=f"URL：{full_url}",
+            )
+            zip_path = dest_dir.parent / (dest_dir.name + ".zip")
+            zip_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Extract
-                with zipfile.ZipFile(zip_path) as zf:
-                    zf.extractall(dest_dir.parent)
+            with httpx.stream("GET", full_url, follow_redirects=True, timeout=120) as response:
+                if response.status_code != 200:
+                    continue
+                total = int(response.headers.get("content-length", "0") or 0)
+                downloaded = 0
+                last_emit = 0.0
+                last_pct = -1
+                with open(zip_path, "wb") as f:
+                    for chunk in response.iter_bytes():
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.monotonic()
+                        if total:
+                            pct = int(downloaded * 100 / total)
+                            if pct != last_pct:
+                                last_pct = pct
+                                bar = make_progress_bar(pct)
+                                emit_progress(
+                                    "Evaluate repo",
+                                    "正在下载仓库 ZIP",
+                                    detail=f"{bar} {downloaded / 1024 / 1024:.1f} MiB",
+                                    clone_progress=f"zip {pct}%",
+                                )
+                        elif now - last_emit >= 1.0:
+                            last_emit = now
+                            emit_progress(
+                                "Evaluate repo",
+                                "正在下载仓库 ZIP",
+                                detail=f"已下载 {downloaded / 1024 / 1024:.1f} MiB",
+                                clone_progress="zip 下载中",
+                            )
 
-                # GitHub zip extracts into owner-repo-branch/ dir, move contents up
-                extracted = dest_dir.parent / f"{dest_dir.name}-{branch}"
-                if not extracted.exists():
-                    # Try finding the extracted dir by listing
-                    for item in dest_dir.parent.iterdir():
-                        if item.is_dir() and item.name != dest_dir.name:
-                            extracted = item
-                            break
+            emit_progress("Evaluate repo", "仓库 ZIP 下载完成，正在解压")
 
-                if extracted.exists():
-                    extracted.rename(dest_dir)
+            # Extract
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(dest_dir.parent)
 
-                zip_path.unlink(missing_ok=True)
-                logger.info("zip download and extraction successful")
-                return dest_dir
+            extracted = dest_dir.parent / f"{dest_dir.name}-{branch}"
+            if not extracted.exists():
+                for item in dest_dir.parent.iterdir():
+                    if item.is_dir() and item.name != dest_dir.name:
+                        extracted = item
+                        break
+
+            if extracted.exists():
+                extracted.rename(dest_dir)
+
+            zip_path.unlink(missing_ok=True)
+            emit_progress("Evaluate repo", "仓库解压完成", detail=f"目标目录：{dest_dir}")
+            logger.info("zip download and extraction successful")
+            return dest_dir
+
         except Exception as e:
             logger.warning("zip download for branch %s failed: %s", branch, e)
             continue

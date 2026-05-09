@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-"""Collapsible stage card — self-managed collapse, log buffer, no Collapsible widget."""
+"""Collapsible stage card — click to expand/collapse, log buffer, running=open by default."""
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
 
 from .. import theme as T
+from ..display_utils import clean_display_text
 
-# Chinese labels
+# ── Chinese labels ────────────────────────────────────────
+
 _STAGE_CN: dict[str, str] = {
     "Ingest paper": "解析论文",
     "Understand paper": "理解论文",
@@ -25,13 +28,8 @@ _STAGE_CN: dict[str, str] = {
 }
 
 _STATUS_CN: dict[str, str] = {
-    "queued": "等待",
-    "running": "运行中",
-    "success": "完成",
-    "failed": "失败",
-    "skipped": "跳过",
-    "cancelled": "取消",
-    "disabled": "禁用",
+    "queued": "等待", "running": "运行中", "success": "完成",
+    "failed": "失败", "skipped": "跳过", "cancelled": "取消", "disabled": "禁用",
 }
 
 _ICON_MAP: dict[str, str] = {
@@ -40,18 +38,18 @@ _ICON_MAP: dict[str, str] = {
 }
 
 
-def _clean(text: str) -> str:
-    """Remove Markdown bold markers from display text."""
-    return text.replace("**", "").replace("__", "").strip()
-
-
 class ToolCard(Widget):
     """A single pipeline stage card: click to expand/collapse."""
+
+    can_focus = True
 
     DEFAULT_CSS = """
     ToolCard {
         margin: 0 0 1 1;
         height: auto;
+    }
+    ToolCard:focus {
+        border: dashed $primary;
     }
     ToolCard .tool-header {
         color: $text;
@@ -62,6 +60,11 @@ class ToolCard(Widget):
         margin-left: 2;
     }
     """
+
+    BINDINGS = [
+        Binding("enter", "toggle_collapsed", "展开/折叠", show=False),
+        Binding("space", "toggle_collapsed", "展开/折叠", show=False),
+    ]
 
     class StatusChanged(Message):
         def __init__(self, status: str) -> None:
@@ -81,13 +84,14 @@ class ToolCard(Widget):
         super().__init__(**kwargs)
         self.tool_name = name
         self._status = status
-        self._message = message
-        self._detail = detail or ""
+        self._message = clean_display_text(message)
+        self._detail = clean_display_text(detail or "")
         self._duration = duration
         self._attempts = attempts
 
-        # Collapse state
-        self._collapsed = True
+        # Running → expanded by default; finished → collapsed
+        self._collapsed = status != "running"
+        self._user_toggled = False
         self._log_lines: list[str] = []
         self._max_expanded = 5
 
@@ -97,44 +101,47 @@ class ToolCard(Widget):
     def status(self) -> str: return self._status
 
     @property
-    def stage_label(self) -> str:
-        return _STAGE_CN.get(self.tool_name, self.tool_name)
+    def stage_label(self) -> str: return _STAGE_CN.get(self.tool_name, self.tool_name)
 
     @property
-    def status_label(self) -> str:
-        return _STATUS_CN.get(self._status, self._status)
+    def status_label(self) -> str: return _STATUS_CN.get(self._status, self._status)
 
     @property
-    def icon(self) -> str:
-        return _ICON_MAP.get(self._status, "●")
+    def icon(self) -> str: return _ICON_MAP.get(self._status, "●")
 
     @property
-    def color(self) -> str:
-        return T.stage_color(self._status)
+    def color(self) -> str: return T.stage_color(self._status)
 
     def latest_log(self) -> str:
         return self._log_lines[-1] if self._log_lines else self._message or ""
 
+    def get_visible_logs(self) -> list[str]:
+        return self._log_lines[-self._max_expanded:]
+
     # ── Log buffer ──────────────────────────────────────────
 
     def append_log(self, line: str) -> None:
-        clean = _clean(line)
+        clean = clean_display_text(line)
         if not clean:
             return
         if self._log_lines and clean == self._log_lines[-1]:
-            return  # dedup consecutive identical lines
+            return
         self._log_lines.append(clean)
         if len(self._log_lines) > 200:
             self._log_lines = self._log_lines[-200:]
 
-    def get_visible_logs(self) -> list[str]:
-        return self._log_lines[-self._max_expanded:] if self._log_lines else []
-
-    # ── Collapse ────────────────────────────────────────────
+    # ── Collapse / expand ──────────────────────────────────
 
     def toggle_collapsed(self) -> None:
         self._collapsed = not self._collapsed
+        self._user_toggled = True
         self._refresh_display()
+
+    def action_toggle_collapsed(self) -> None:
+        self.toggle_collapsed()
+
+    def on_click(self) -> None:
+        self.toggle_collapsed()
 
     # ── Update ──────────────────────────────────────────────
 
@@ -147,12 +154,14 @@ class ToolCard(Widget):
         attempts: int | None = None,
         append_log: str | None = None,
     ) -> None:
+        old_status = self._status
+
         if status is not None:
             self._status = status
         if message is not None:
-            self._message = _clean(message)
+            self._message = clean_display_text(message)
         if detail is not None:
-            self._detail = _clean(detail)
+            self._detail = clean_display_text(detail)
             if detail.strip():
                 for line in detail.splitlines():
                     self.append_log(line)
@@ -162,6 +171,13 @@ class ToolCard(Widget):
             self._attempts = attempts
         if append_log is not None:
             self.append_log(append_log)
+
+        # Auto-collapse on finish if user hasn't manually toggled
+        if not self._user_toggled and status is not None and status != old_status:
+            if status == "running":
+                self._collapsed = False
+            elif status in ("success", "failed", "skipped", "cancelled", "disabled"):
+                self._collapsed = True
 
         self._refresh_display()
 
@@ -180,7 +196,9 @@ class ToolCard(Widget):
         color = self.color
         dur = self._format_duration()
         dur_str = f" {dur}" if dur else ""
-        latest = self.latest_log()[:60]
+        latest = self.latest_log()
+        if len(latest) > 70:
+            latest = latest[:67] + "..."
         latest_str = f" · {latest}" if latest else ""
         collapse_icon = "▾" if not self._collapsed else "▸"
 
@@ -193,7 +211,6 @@ class ToolCard(Widget):
         except Exception:
             pass
 
-        # Body: visible only when expanded
         try:
             body = self.query_one(".tool-body", Static)
             if self._collapsed:
