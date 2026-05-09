@@ -460,7 +460,6 @@ class PaperAgentApp(App):
 
         if ev.phase == "start":
             stage_times[name] = now
-        # Compute duration for ALL phases, not just finish/fail
         duration = None
         if name in stage_times:
             duration = now - stage_times[name]
@@ -484,14 +483,29 @@ class PaperAgentApp(App):
             sv.detail = ev.detail or ""
             sv.duration = duration
 
-        # Update tool card
+        # Build log lines from progress data
+        log_lines = self._build_progress_log_lines(ev)
+
+        # Get/create tool card and append logs
         card = self._get_or_create_tool_card(name, ev.message)
+        for line in log_lines:
+            card.append_log(line)
         card.update(
             status=status,
             message=ev.message,
-            detail=ev.detail or "",
+            detail=None,  # detail already fed into log_lines
             duration=duration,
         )
+
+        # Only emit timeline message on start/finish/fail (summary only)
+        if ev.phase in ("start", "finish", "fail"):
+            stage_label = self._STAGE_LABELS_CN.get(name, name)
+            phase_label = self._PHASE_LABELS_CN.get(ev.phase, "运行")
+            dur_str = f" ({duration:.1f}s)" if duration is not None else ""
+            self._timeline.add_tool(
+                f"**{stage_label}** · {phase_label}{dur_str}",
+                label=phase_label,
+            )
 
         # Update pipeline panel
         if self._pipeline_panel:
@@ -507,59 +521,30 @@ class PaperAgentApp(App):
         if self._header:
             self._header.update_summary(status=status)
 
-        # Live progress log to timeline
-        self._maybe_add_live_progress_log(ev, duration)
-
         if ev.phase in ("finish", "fail"):
             self._sync_artifact_panel()
 
-    def _maybe_add_live_progress_log(self, ev: ProgressEvent, duration: float | None) -> None:
-        """Append a live progress log message to the timeline, throttled for duplicates."""
-        if not self._timeline:
-            return
-
-        if ev.phase not in ("start", "progress", "finish", "fail"):
-            return
-
+    def _build_progress_log_lines(self, ev: ProgressEvent) -> list[str]:
+        """Extract log lines from a progress event for the ToolCard buffer."""
         lines: list[str] = []
-        stage_label = self._STAGE_LABELS_CN.get(ev.stage, ev.stage)
-        phase_label = self._PHASE_LABELS_CN.get(ev.phase, "运行")
-        dur_str = f" ({duration:.1f}s)" if duration is not None else ""
-
-        if ev.message:
-            lines.append(f"**{stage_label}** · {phase_label}{dur_str}：{ev.message}")
-        elif ev.phase == "start":
-            lines.append(f"**{stage_label}** · {phase_label}")
-        elif ev.phase in ("finish", "fail"):
-            lines.append(f"**{stage_label}** · {phase_label}{dur_str}")
-
         if ev.detail:
-            lines.append(ev.detail)
-
-        for data_key, label in self._DATA_KEY_LABELS_CN.items():
-            val = ev.data.get(data_key)
+            for line in ev.detail.splitlines():
+                clean = line.strip()
+                if clean:
+                    lines.append(clean)
+        for key in ("repo_url", "repo_dir", "command", "log_path", "selected_repo", "runnable_score", "clone_progress", "proxy_status"):
+            val = ev.data.get(key)
             if val:
-                lines.append(f"  {label}：`{val}`")
-
-        log_lines = ev.data.get("log_lines")
-        if isinstance(log_lines, list):
-            for line in log_lines[:10]:
-                lines.append(f"  - {line}")
-
-        text = "\n".join(lines).strip()
-        if not text:
-            return
-
-        # Throttle: skip identical consecutive messages
-        sig = (ev.stage, ev.phase, ev.message, ev.detail)
-        if sig == self._last_live_log_sig:
-            return
-        self._last_live_log_sig = sig
-
-        if len(text) > 1200:
-            text = text[:1200] + "\n\n... 内容已截断，可使用 `/logs` 查看完整日志。"
-
-        self._timeline.add_tool(text, label=phase_label)
+                lines.append(f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{val}")
+        raw_lines = ev.data.get("log_lines")
+        if isinstance(raw_lines, list):
+            for line in raw_lines:
+                clean = str(line).strip()
+                if clean:
+                    lines.append(clean)
+        if not lines and ev.message:
+            lines.append(ev.message)
+        return lines
 
     # ── Composer input ───────────────────────────────────────
 

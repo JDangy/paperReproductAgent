@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import shutil
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
 import git
+from git import RemoteProgress
 import httpx
 import yaml
+
+from app.core.progress import emit_progress
 
 logger = logging.getLogger(__name__)
 
@@ -38,26 +44,152 @@ def clone_repo(url: str, dest_dir: Path, max_retries: int = 3) -> Path:
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
 
+    # Detect and report proxy
+    proxies = detect_git_proxy()
+    if proxies:
+        proxy_summary = "\n".join(
+            f"  - {k}={mask_proxy_url(v)}" for k, v in sorted(proxies.items())
+        )
+        emit_progress(
+            "Evaluate repo",
+            "检测到 Git 代理配置",
+            detail=proxy_summary,
+            proxy_status="检测到代理",
+            log_lines=[proxy_summary],
+        )
+    else:
+        emit_progress("Evaluate repo", "未检测到代理或 Git 全局配置", proxy_status="无代理")
+
+    # Build clone env with proxy vars
+    clone_env = {**os.environ}
+    for k, v in proxies.items():
+        clone_env[k] = v
+
     # Try git clone with retries
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
             logger.info("git clone attempt %d/%d: %s", attempt, max_retries, url)
-            git.Repo.clone_from(url, dest_dir, depth=1)
+            emit_progress(
+                "Evaluate repo",
+                f"正在克隆仓库，第 {attempt}/{max_retries} 次尝试",
+                detail=f"仓库地址：{url}\n目标目录：{dest_dir}",
+                repo_url=url,
+                repo_dir=str(dest_dir),
+            )
+            _clone_with_progress(url, dest_dir, env=clone_env)
             return dest_dir
         except Exception as e:
             last_error = e
             logger.warning("git clone attempt %d failed: %s", attempt, e)
+            emit_progress(
+                "Evaluate repo",
+                f"克隆失败（第 {attempt}/{max_retries} 次）",
+                level="warning",
+                detail=str(e),
+            )
             if dest_dir.exists():
                 shutil.rmtree(dest_dir)
+            time.sleep(1)
 
     # Fallback: download zip
     logger.info("git clone failed after %d attempts, trying zip download", max_retries)
+    emit_progress(
+        "Evaluate repo",
+        "Git clone 失败，尝试 Zip 下载",
+        detail=f"正在通过 Zip 方式获取仓库：{url}",
+    )
     try:
         return _download_repo_zip(url, dest_dir)
     except Exception as zip_err:
         logger.error("zip download also failed: %s", zip_err)
         raise last_error
+
+
+def _clone_with_progress(url: str, dest_dir: Path, env: dict | None = None) -> None:
+    """Clone with progress reporting via GitPython RemoteProgress."""
+    progress = _CloneProgress()
+    git.Repo.clone_from(
+        url,
+        dest_dir,
+        depth=1,
+        progress=progress,
+        env=env,
+    )
+
+
+class _CloneProgress(RemoteProgress):
+    """GitPython progress reporter that emits TUI progress events."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._last_emit = 0.0
+
+    def update(self, op_code, cur_count, max_count=None, message=""):
+        super().update(op_code, cur_count, max_count, message)
+        now = time.monotonic()
+        if now - self._last_emit < 0.5:
+            return
+        self._last_emit = now
+
+        stage = _op_code_label(op_code)
+        pct = ""
+        if max_count and max_count > 0:
+            pct = f" {cur_count * 100 // max_count}%"
+        msg = f"{stage}{pct} {cur_count}/{max_count or '?'} {message or ''}".strip()
+
+        emit_progress(
+            "Evaluate repo",
+            "正在克隆仓库",
+            detail=msg,
+            clone_progress=msg,
+        )
+
+
+def _op_code_label(op_code: int) -> str:
+    if op_code & RemoteProgress.COUNTING:
+        return "统计对象"
+    if op_code & RemoteProgress.COMPRESSING:
+        return "压缩对象"
+    if op_code & RemoteProgress.RECEIVING:
+        return "接收对象"
+    if op_code & RemoteProgress.RESOLVING:
+        return "解析增量"
+    if op_code & RemoteProgress.WRITING:
+        return "写入对象"
+    return "克隆中"
+
+
+def detect_git_proxy() -> dict[str, str]:
+    """Detect proxy settings from environment and git global config."""
+    proxies: dict[str, str] = {}
+
+    env_keys = [
+        "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
+        "https_proxy", "http_proxy", "all_proxy",
+    ]
+    for key in env_keys:
+        value = os.environ.get(key)
+        if value:
+            proxies[key] = value
+
+    for config_name in ("http.proxy", "https.proxy"):
+        try:
+            result = subprocess.run(
+                ["git", "config", "--global", "--get", config_name],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                proxies[f"git_{config_name.replace('.', '_')}"] = result.stdout.strip()
+        except Exception:
+            pass
+
+    return proxies
+
+
+def mask_proxy_url(value: str) -> str:
+    """Mask user:pass in proxy URLs.  http://u:p@h:p → http://***@h:p"""
+    return re.sub(r"://[^:]+:[^@]+@", "://***@", value)
 
 
 def _download_repo_zip(url: str, dest_dir: Path) -> Path:
