@@ -160,6 +160,14 @@ class PaperAgentApp(App):
         self._stage_views: dict[str, StageView] = {}
         self._reset_stage_views()
 
+        # Run tracking for live status
+        self._run_started_at: float | None = None
+        self._current_stage: str | None = None
+        self._current_stage_message: str | None = None
+        self._last_progress_at: float | None = None
+        self._last_live_log_sig: tuple | None = None
+        self._heartbeat_timer: object | None = None
+
     # ── Compose ──────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
@@ -411,15 +419,50 @@ class PaperAgentApp(App):
 
     # ── Progress handling ────────────────────────────────────
 
+    _STAGE_LABELS_CN: dict[str, str] = {
+        "Ingest paper": "解析论文",
+        "Understand paper": "理解论文",
+        "Search GitHub": "搜索 GitHub",
+        "Evaluate repo": "评估仓库",
+        "Build conda env": "构建 conda 环境",
+        "Build virtualenv": "构建虚拟环境",
+        "Build Docker image": "构建 Docker 镜像",
+        "Run smoke command": "运行冒烟测试",
+        "Run benchmark reproduction": "运行 benchmark 复现",
+        "Run simple reproduction": "运行轻量复现",
+        "Write report": "生成报告",
+    }
+
+    _PHASE_LABELS_CN: dict[str, str] = {
+        "start": "开始",
+        "progress": "运行",
+        "finish": "完成",
+        "fail": "失败",
+        "skip": "跳过",
+    }
+
+    _DATA_KEY_LABELS_CN: dict[str, str] = {
+        "repo_url": "仓库地址",
+        "repo_dir": "仓库目录",
+        "command": "执行命令",
+        "log_path": "日志路径",
+        "selected_repo": "选中仓库",
+        "runnable_score": "可运行评分",
+    }
+
     def _handle_progress_event(self, ev: ProgressEvent, stage_times: dict[str, float]) -> None:
         """Handle a progress event from the pipeline thread (called via call_from_thread)."""
         name = ev.stage
         now = time.monotonic()
+        self._last_progress_at = now
+        self._current_stage = name
+        self._current_stage_message = ev.message
 
         if ev.phase == "start":
             stage_times[name] = now
+        # Compute duration for ALL phases, not just finish/fail
         duration = None
-        if name in stage_times and ev.phase in ("finish", "fail"):
+        if name in stage_times:
             duration = now - stage_times[name]
 
         phase_status = {
@@ -464,8 +507,59 @@ class PaperAgentApp(App):
         if self._header:
             self._header.update_summary(status=status)
 
+        # Live progress log to timeline
+        self._maybe_add_live_progress_log(ev, duration)
+
         if ev.phase in ("finish", "fail"):
             self._sync_artifact_panel()
+
+    def _maybe_add_live_progress_log(self, ev: ProgressEvent, duration: float | None) -> None:
+        """Append a live progress log message to the timeline, throttled for duplicates."""
+        if not self._timeline:
+            return
+
+        if ev.phase not in ("start", "progress", "finish", "fail"):
+            return
+
+        lines: list[str] = []
+        stage_label = self._STAGE_LABELS_CN.get(ev.stage, ev.stage)
+        phase_label = self._PHASE_LABELS_CN.get(ev.phase, "运行")
+        dur_str = f" ({duration:.1f}s)" if duration is not None else ""
+
+        if ev.message:
+            lines.append(f"**{stage_label}** · {phase_label}{dur_str}：{ev.message}")
+        elif ev.phase == "start":
+            lines.append(f"**{stage_label}** · {phase_label}")
+        elif ev.phase in ("finish", "fail"):
+            lines.append(f"**{stage_label}** · {phase_label}{dur_str}")
+
+        if ev.detail:
+            lines.append(ev.detail)
+
+        for data_key, label in self._DATA_KEY_LABELS_CN.items():
+            val = ev.data.get(data_key)
+            if val:
+                lines.append(f"  {label}：`{val}`")
+
+        log_lines = ev.data.get("log_lines")
+        if isinstance(log_lines, list):
+            for line in log_lines[:10]:
+                lines.append(f"  - {line}")
+
+        text = "\n".join(lines).strip()
+        if not text:
+            return
+
+        # Throttle: skip identical consecutive messages
+        sig = (ev.stage, ev.phase, ev.message, ev.detail)
+        if sig == self._last_live_log_sig:
+            return
+        self._last_live_log_sig = sig
+
+        if len(text) > 1200:
+            text = text[:1200] + "\n\n... 内容已截断，可使用 `/logs` 查看完整日志。"
+
+        self._timeline.add_tool(text, label=phase_label)
 
     # ── Composer input ───────────────────────────────────────
 
@@ -589,6 +683,20 @@ class PaperAgentApp(App):
             self._timeline.clear_messages()
 
     def _cmd_status(self, _: str) -> None:
+        if self.agent_running:
+            elapsed = time.monotonic() - self._run_started_at if self._run_started_at else 0
+            stage_label = self._STAGE_LABELS_CN.get(self._current_stage or "", self._current_stage or "-")
+            self._add_assistant(
+                "## 当前任务正在运行\n\n"
+                f"- 当前阶段：**{stage_label}**\n"
+                f"- 阶段消息：{self._current_stage_message or '-'}\n"
+                f"- 后端：`{self.session.backend}`\n"
+                f"- 论文：`{self.session.paper_path or '-'}`\n"
+                f"- 已运行：{elapsed:.1f}s\n"
+                "- 可用命令：`/status` `/logs` `/cancel`\n"
+            )
+            return
+
         s = self.session
         if not s.task_dir:
             self._add_assistant("当前会话尚未运行过任务。")
@@ -753,6 +861,14 @@ class PaperAgentApp(App):
         self.agent_running = True
         self.session.status = "running"
         self.session.cancel_requested = False
+
+        # Initialize run tracking
+        self._run_started_at = time.monotonic()
+        self._current_stage = None
+        self._current_stage_message = None
+        self._last_progress_at = None
+        self._last_live_log_sig = None
+
         self._update_status()
         self._sync_session_panel()
         if self._composer:
@@ -761,6 +877,9 @@ class PaperAgentApp(App):
         self._reset_stage_views()
         if self._pipeline_panel:
             self._pipeline_panel.reset(self.session.backend)
+
+        # Start heartbeat
+        self._heartbeat_timer = self.set_interval(10, self._heartbeat_running_task)
 
         def _cancel_check() -> bool:
             return self.session.cancel_requested
@@ -818,6 +937,13 @@ class PaperAgentApp(App):
             self._add_error(f"Pipeline 异常：{e}")
         finally:
             self.agent_running = False
+            # Stop heartbeat
+            if self._heartbeat_timer is not None:
+                try:
+                    self._heartbeat_timer.stop()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                self._heartbeat_timer = None
             if self._composer:
                 self._composer.set_running(False)
                 self._composer.focus_input()
@@ -831,6 +957,21 @@ class PaperAgentApp(App):
             return
         self.session.cancel_requested = True
         self._add_system("已请求取消。等待当前步骤完成...")
+
+    def _heartbeat_running_task(self) -> None:
+        """Periodic check: show 'still running' if no progress for >12s."""
+        if not self.agent_running:
+            return
+        now = time.monotonic()
+        if self._last_progress_at and now - self._last_progress_at < 12:
+            return
+        elapsed = now - self._run_started_at if self._run_started_at else 0
+        stage_label = self._STAGE_LABELS_CN.get(self._current_stage or "", self._current_stage or "未知阶段")
+        self._add_system(
+            f"仍在运行：**{stage_label}** 已持续 {elapsed:.0f}s。"
+            "可能正在等待网络、克隆仓库、解析依赖或模型响应。"
+        )
+        self._last_progress_at = now
 
     # ── Paper submission ─────────────────────────────────────
 

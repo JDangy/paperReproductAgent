@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Enhanced tool call card — collapsible display for pipeline stages."""
+"""Enhanced tool call card — simple header + body without Collapsible."""
 
 from textual.app import ComposeResult
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Static, Collapsible
+from textual.widgets import Static
 
 from .. import theme as T
 
@@ -136,22 +136,11 @@ class ToolCard(Widget):
         except Exception:
             pass
 
-        # Auto-collapse on success, expand on failure
-        try:
-            collapsible = self.query_one(Collapsible)
-            if self._status == "success":
-                collapsible.collapsed = True
-            elif self._status in ("failed", "running"):
-                collapsible.collapsed = False
-        except Exception:
-            pass
-
     def compose(self) -> ComposeResult:
-        with Collapsible(title="", classes="tool-collapsible", collapsed=False):
-            yield Static("", classes="tool-header")
-            body = Static("", classes="tool-body")
-            body.display = False
-            yield body
+        yield Static("", classes="tool-header")
+        body = Static("", classes="tool-body")
+        body.display = False
+        yield body
 
     def on_mount(self) -> None:
         self._refresh_display()
