@@ -46,6 +46,8 @@ COMMANDS: dict[str, CommandMeta] = {
     "open-report": CommandMeta("open-report", "", "显示报告文件路径", "查看", True),
     "mode": CommandMeta("mode", "", "显示当前 PLAN/ACT 模式", "模式", True),
     "reset": CommandMeta("reset", "", "清空当前会话输入（不删文件）", "会话", False),
+    "conda-envs": CommandMeta("conda-envs", "[list|delete|prune]", "查看或删除项目 conda 环境", "环境", True, "[list|delete|prune]"),
+    "envs": CommandMeta("envs", "[list|delete|prune]", "查看或删除项目 conda 环境", "环境", True, "[list|delete|prune]"),
 }
 
 RUNNING_SAFE_COMMANDS: set[str] = {n for n, m in COMMANDS.items() if m.safe_during_run}

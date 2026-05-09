@@ -17,6 +17,7 @@ from app.tools.repo_tool import (
     extract_pip_requirements_from_environment_file,
     find_requirement_files,
 )
+from app.tools.conda_env_manager import write_project_env_marker
 
 
 class CondaBuildAgent:
@@ -69,6 +70,7 @@ class CondaBuildAgent:
                 })
                 log_parts.append(f"Reusing existing paper-named conda environment: {conda_env_dir}")
                 emit_progress("Build conda env", "reused existing environment", level="success", detail=str(conda_env_dir))
+                _write_marker(conda_env_dir, state, paper_slug, python_bin)
                 build_log_path.write_text("\n".join(log_parts), encoding="utf-8")
                 state.env_build = result
                 save_json(env_dir / "environment_summary.json", result)
@@ -143,6 +145,7 @@ class CondaBuildAgent:
 
             result.build_success = True
             emit_progress("Build conda env", "environment ready", level="success")
+            _write_marker(conda_env_dir, state, paper_slug, python_bin)
 
         except subprocess.TimeoutExpired:
             result.build_success = False
@@ -343,3 +346,20 @@ def _bridge_preferred_runtime(conda_env_dir: Path, log_parts: list[str], result:
         "source": str(preferred_site),
         "path": str(pth_path),
     })
+
+
+def _write_marker(env_dir: Path, state: TaskState, slug: str, python_bin: Path) -> None:
+    """Write .paper_reproduct_agent_env.json marker for future discovery."""
+    try:
+        repo_url = state.selected_repo.url if state.selected_repo else ""
+        write_project_env_marker(
+            env_dir,
+            task_id=state.task_id,
+            paper_slug=slug,
+            paper_path=state.input_value,
+            repo_url=repo_url,
+            workspace=state.workspace_dir,
+            python_executable=str(python_bin),
+        )
+    except Exception:
+        pass  # non-critical

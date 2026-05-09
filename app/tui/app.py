@@ -38,6 +38,7 @@ _HELP_CATEGORIES: dict[str, list[str]] = {
     "界面": ["panel"],
     "会话": ["sessions", "resume", "reset"],
     "系统": ["help", "clear", "quit", "exit"],
+    "环境": ["conda-envs", "envs"],
 }
 
 
@@ -140,6 +141,7 @@ class PaperAgentApp(App):
         self.store = SessionStore(self.session.id)
         self.agent_running = False
         self._pending_shell: str | None = None
+        self._pending_env_delete: dict | None = None
         self._active_panel = "pipeline"
 
         # Widget refs
@@ -555,6 +557,10 @@ class PaperAgentApp(App):
             self._confirm_shell(line)
             return
 
+        if self._pending_env_delete is not None:
+            self._confirm_env_delete(line)
+            return
+
         command, args = parse_command(line)
         if command == "":
             return
@@ -608,6 +614,8 @@ class PaperAgentApp(App):
             "open-report": self._cmd_open_report,
             "mode": self._cmd_mode,
             "reset": self._cmd_reset,
+            "conda-envs": self._cmd_conda_envs,
+            "envs": self._cmd_conda_envs,
         }
         handler = handlers.get(command)
         if handler is None:
@@ -1178,6 +1186,120 @@ class PaperAgentApp(App):
             self._add_assistant(f"已恢复会话 `{sid}`（状态：{self.session.status}）")
         except Exception as e:
             self._add_error(f"恢复失败：{e}")
+
+    # ── Conda env management ─────────────────────────────────
+
+    def _cmd_conda_envs(self, args: str) -> None:
+        parts = args.strip().split()
+        action = parts[0].lower() if parts else "list"
+
+        if action in ("list", "ls"):
+            self._cmd_conda_envs_list()
+            return
+        if action in ("delete", "del", "remove", "rm"):
+            self._cmd_conda_envs_delete(" ".join(parts[1:]).strip())
+            return
+        if action == "prune":
+            self._add_assistant(
+                "`/conda-envs prune` 暂未实现。\n\n"
+                "可用命令：\n"
+                "- `/conda-envs` 查看环境\n"
+                "- `/conda-envs delete <编号>` 删除指定环境\n"
+                "- `/conda-envs delete --all` 删除全部项目环境"
+            )
+            return
+
+        self._add_error(
+            "用法：\n"
+            "`/conda-envs` 或 `/envs` —— 列出项目 conda 环境\n"
+            "`/conda-envs delete <编号|slug>` —— 删除指定环境\n"
+            "`/conda-envs delete --all` —— 删除全部项目环境"
+        )
+
+    def _cmd_conda_envs_list(self) -> None:
+        from app.tools.conda_env_manager import discover_project_conda_envs, format_env_table
+        envs = discover_project_conda_envs(self.session.workspace)
+        if not envs:
+            self._add_assistant(
+                "当前 workspace 下未发现本项目创建的 conda 环境。\n\n"
+                f"检查目录：`{Path(self.session.workspace).resolve() / 'envs'}`"
+            )
+            return
+        self._add_assistant(
+            "## 项目 conda 环境\n\n"
+            f"Workspace：`{self.session.workspace}`\n\n"
+            + format_env_table(envs)
+            + "\n\n删除示例：\n"
+            "- `/conda-envs delete 1`\n"
+            "- `/conda-envs delete <slug>`\n"
+            "- `/conda-envs delete --all`"
+        )
+
+    def _cmd_conda_envs_delete(self, selector: str) -> None:
+        if self.agent_running:
+            self._add_error("Agent 正在运行，暂不允许删除 conda 环境。请先 `/cancel` 或等待任务完成。")
+            return
+        if not selector:
+            self._add_error("用法：`/conda-envs delete <编号|slug|路径>` 或 `/conda-envs delete --all`")
+            return
+
+        from app.tools.conda_env_manager import discover_project_conda_envs, find_env_by_selector
+        envs = discover_project_conda_envs(self.session.workspace)
+
+        if selector == "--all":
+            if not envs:
+                self._add_assistant("没有可删除的项目 conda 环境。")
+                return
+            self._pending_env_delete = {"mode": "all", "envs": envs}
+            self._add_error(
+                f"确认删除当前 workspace 下的 **{len(envs)} 个**项目 conda 环境？\n"
+                "这会删除 `<workspace>/envs/*` 下由本项目创建的环境。\n"
+                "请输入 `yes` 确认，或输入其他内容取消。"
+            )
+            return
+
+        env = find_env_by_selector(selector, envs)
+        if env is None:
+            self._add_error(f"未找到环境：`{selector}`。请先输入 `/conda-envs` 查看可删除环境列表。")
+            return
+
+        self._pending_env_delete = {"mode": "one", "env": env}
+        self._add_error(
+            "确认删除这个项目 conda 环境？\n\n"
+            f"- Slug：`{env.slug}`\n"
+            f"- 路径：`{env.path}`\n\n"
+            "请输入 `yes` 确认，或输入其他内容取消。"
+        )
+
+    def _confirm_env_delete(self, line: str) -> None:
+        pending = self._pending_env_delete
+        self._pending_env_delete = None
+
+        if line.strip().lower() not in ("yes", "y", "确认"):
+            self._add_assistant("已取消删除。")
+            return
+
+        from app.tools.conda_env_manager import remove_conda_env
+
+        if pending["mode"] == "one":
+            env = pending["env"]
+            ok, msg = remove_conda_env(env, workspace=self.session.workspace)
+            if ok:
+                self._add_assistant(f"删除成功：`{env.slug}` —— {msg}")
+            else:
+                self._add_error(msg)
+            return
+
+        if pending["mode"] == "all":
+            results = []
+            for env in pending["envs"]:
+                ok, msg = remove_conda_env(env, workspace=self.session.workspace)
+                results.append((env.slug, ok, msg))
+            lines = ["## conda 环境删除结果", ""]
+            for slug, ok, msg in results:
+                mark = "✅" if ok else "❌"
+                lines.append(f"- {mark} `{slug}` — {msg}")
+            self._add_assistant("\n".join(lines))
 
     def _cmd_quit(self, _: str) -> None:
         self._cleanup_timers()
