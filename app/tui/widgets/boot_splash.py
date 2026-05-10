@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Boot splash screen with spinning logo and preflight checks."""
+
+from __future__ import annotations
 
 import asyncio
 
@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from .. import theme as T
-from ..logo_loader import load_logo_frames, FPS_INTERVAL, LINES, CAS_BLUE
+from ..logo_loader import load_logo_frames, FPS_INTERVAL, CAS_BLUE
 from ..preflight import CheckItem, run_preflight
 
 
@@ -24,7 +24,10 @@ class BootSplash(Screen):
     DEFAULT_CSS = """
     BootSplash {
         align: center middle;
-        background: black;
+        background: #000000;
+    }
+    BootSplash > Vertical {
+        background: #000000;
     }
     BootSplash #splash-logo {
         height: auto;
@@ -32,17 +35,20 @@ class BootSplash(Screen):
         text-wrap: nowrap;
         overflow: hidden;
         margin-bottom: 1;
+        background: #000000;
     }
     BootSplash #splash-checks {
         height: auto;
         content-align: center middle;
         color: #888888;
+        background: #000000;
     }
     BootSplash #splash-status {
         height: 1;
         content-align: center middle;
         color: #888888;
         margin-top: 1;
+        background: #000000;
     }
     """
 
@@ -124,7 +130,9 @@ class BootSplash(Screen):
             return
 
         animated: list[CheckItem] = [
-            CheckItem(name=item.name, status="pending", message="", blocking=item.blocking)
+            CheckItem(
+                name=item.name, status="pending", message="", blocking=item.blocking
+            )
             for item in results
         ]
         self._checks = animated
@@ -157,7 +165,9 @@ class BootSplash(Screen):
                 f"（{blocking} 项阻塞，将进入 TUI 显示警告）[/]"
             )
         elif fails > 0:
-            status.update(f"[{T.WARNING_BORDER}]检查完成：{passes} 通过，{fails} 项非阻塞警告[/]")
+            status.update(
+                f"[{T.WARNING_BORDER}]检查完成：{passes} 通过，{fails} 项非阻塞警告[/]"
+            )
         else:
             status.update(f"[{T.GREEN}]全部检查通过 ✓[/]")
 
@@ -183,7 +193,12 @@ class BootSplash(Screen):
                 icon = spinner
             else:
                 icon = {"pending": "○", "pass": "✓", "fail": "✗"}.get(item.status, "?")
-            color = {"pending": "#ffffff", "running": "#8be9fd", "pass": CAS_BLUE_HEX, "fail": T.ERROR_BORDER}.get(item.status, T.FG)
+            color = {
+                "pending": "#ffffff",
+                "running": "#8be9fd",
+                "pass": CAS_BLUE_HEX,
+                "fail": T.ERROR_BORDER,
+            }.get(item.status, T.FG)
             left = f"{icon} {item.name}"
             msg = item.message[:52] if item.message else ""
             lines.append(f"[{color}]{left:<{left_w}}[/][{T.FG_DIM}]{msg}[/]")
