@@ -15,6 +15,9 @@ from ..logo_loader import load_logo_frames, FPS_INTERVAL, LINES, CAS_BLUE
 from ..preflight import CheckItem, run_preflight
 
 
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠴", "⠦", "⠧", "⠇")
+
+
 class BootSplash(Screen):
     """Full-screen preflight check display with spinning logo."""
 
@@ -56,6 +59,7 @@ class BootSplash(Screen):
         self._cancelled = False
         self._frames: list = []
         self._frame_idx = 0
+        self._spinner_idx = 0
         self._playing = False
         self._logo_timer = None
 
@@ -89,9 +93,13 @@ class BootSplash(Screen):
     def _next_frame(self) -> None:
         if not self._playing or not self._frames:
             return
+        self._spinner_idx = (self._spinner_idx + 1) % len(SPINNER_FRAMES)
+        has_running = any(c.status == "running" for c in self._checks)
         try:
             self._frame_idx = (self._frame_idx + 1) % len(self._frames)
             self.query_one("#splash-logo", Static).update(self._frames[self._frame_idx])
+            if has_running:
+                self._refresh_checks(self.query_one("#splash-checks", Static))
         except Exception:
             self._playing = False
 
@@ -129,7 +137,7 @@ class BootSplash(Screen):
             animated[i].status = "running"
             animated[i].message = "正在检查……"
             self._refresh_checks(checks)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.2)
 
             animated[i].status = final_item.status
             animated[i].message = final_item.message
@@ -168,24 +176,15 @@ class BootSplash(Screen):
     def _refresh_checks(self, widget: Static) -> None:
         lines: list[str] = []
         left_w = 24
+        spinner = SPINNER_FRAMES[self._spinner_idx]
+        CAS_BLUE_HEX = f"#{CAS_BLUE[0]:02x}{CAS_BLUE[1]:02x}{CAS_BLUE[2]:02x}"
         for item in self._checks:
-            icon = _icon_for(item.status)
-            color = _color_for(item.status)
+            if item.status == "running":
+                icon = spinner
+            else:
+                icon = {"pending": "○", "pass": "✓", "fail": "✗"}.get(item.status, "?")
+            color = {"pending": "#ffffff", "running": "#8be9fd", "pass": CAS_BLUE_HEX, "fail": T.ERROR_BORDER}.get(item.status, T.FG)
             left = f"{icon} {item.name}"
             msg = item.message[:52] if item.message else ""
             lines.append(f"[{color}]{left:<{left_w}}[/][{T.FG_DIM}]{msg}[/]")
         widget.update("\n".join(lines))
-
-
-def _icon_for(status: str) -> str:
-    return {"pending": "○", "running": "⟳", "pass": "✓", "fail": "✗"}.get(status, "?")
-
-
-def _color_for(status: str) -> str:
-    CAS_BLUE_HEX = f"#{CAS_BLUE[0]:02x}{CAS_BLUE[1]:02x}{CAS_BLUE[2]:02x}"
-    return {
-        "pending": "#ffffff",
-        "running": "#8be9fd",
-        "pass": CAS_BLUE_HEX,
-        "fail": T.ERROR_BORDER,
-    }.get(status, T.FG)
