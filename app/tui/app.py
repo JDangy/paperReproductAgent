@@ -42,6 +42,22 @@ def _looks_like_arxiv(value: str) -> bool:
         or bool(_ARXIV_DETECT_RE.fullmatch(v))
     )
 
+
+def _cleanup_killed_task_files(task_dir: str | None) -> None:
+    if not task_dir:
+        return
+    import shutil
+    td = Path(task_dir)
+    for pattern in ("repos/cloned_repo", "repos/*.zip", "repos/*.part", "downloads/*.part"):
+        for path in td.glob(pattern):
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
 # Help categories: grouped command names in display order
 _HELP_CATEGORIES: dict[str, list[str]] = {
     "输入": ["input", "arxiv", "download-arxiv", "repo", "repo-dir"],
@@ -155,6 +171,8 @@ class PaperAgentApp(App):
         self.agent_running = False
         self._pending_shell: str | None = None
         self._pending_env_delete: dict | None = None
+        self._force_kill_requested: bool = False
+        self._pipeline_worker: object | None = None
         self._active_panel = "pipeline"
 
         # Widget refs
@@ -646,6 +664,9 @@ class PaperAgentApp(App):
             "report": self._cmd_report,
             "logs": self._cmd_logs,
             "cancel": self._cmd_cancel,
+            "kill": self._cmd_kill,
+            "force-cancel": self._cmd_kill,
+            "abort": self._cmd_kill,
             "sessions": self._cmd_sessions,
             "session": self._cmd_sessions,
             "resume": self._cmd_resume,
@@ -1014,7 +1035,7 @@ class PaperAgentApp(App):
         def _cancel_check() -> bool:
             return self.session.cancel_requested
 
-        self.run_worker(
+        self._pipeline_worker = self.run_worker(
             self._do_run(paper, _cancel_check),
             exclusive=False,
         )
@@ -1074,6 +1095,9 @@ class PaperAgentApp(App):
             self.session.status = "failed"
             self._add_error(f"Pipeline 异常：{e}")
         finally:
+            # Don't overwrite killed state
+            if self._force_kill_requested:
+                return
             self.agent_running = False
             # Stop heartbeat
             if self._heartbeat_timer is not None:
@@ -1085,16 +1109,79 @@ class PaperAgentApp(App):
             if self._composer:
                 self._composer.set_running(False)
                 self._composer.focus_input()
-            self._update_status()
-            self._sync_session_panel()
-            self._sync_artifact_panel()
+        self._force_kill_requested = False
+        self._update_status()
+        self._sync_session_panel()
+        self._sync_artifact_panel()
 
     def _cmd_cancel(self, _: str) -> None:
         if not self.agent_running:
             self._add_assistant("当前没有运行中的任务。")
             return
         self.session.cancel_requested = True
-        self._add_system("已请求取消。等待当前步骤完成...")
+        self._add_system("已请求取消。等待当前步骤完成……")
+
+    def _cmd_kill(self, _: str) -> None:
+        if not self.agent_running:
+            self._add_assistant("当前没有正在运行的任务。")
+            return
+
+        self.session.cancel_requested = True
+        self._force_kill_requested = True
+        self.session.status = "killed"
+        self._sync_session_panel()
+        self._update_status()
+
+        self._add_error("已请求强制终止：正在杀掉当前任务相关子进程……")
+
+        from app.core.process_control import get_process_registry
+        killed = get_process_registry().kill_all()
+        if killed:
+            self._add_system("已终止子进程：\n" + "\n".join(f"- {x}" for x in killed))
+        else:
+            self._add_system("没有发现已登记的运行中子进程。")
+
+        # Cancel Textual worker
+        try:
+            if self._pipeline_worker is not None:
+                self._pipeline_worker.cancel()  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+        self._mark_run_killed()
+
+    def _mark_run_killed(self) -> None:
+        self.agent_running = False
+        self.session.status = "killed"
+        self._run_started_at = None
+        self._current_stage_message = "已强制终止"
+
+        if self._current_stage:
+            card = self._get_active_tool_card(self._current_stage)
+            if card is not None:
+                card.append_log("任务已被强制终止。")
+                card.update(status="failed", message="已强制终止")
+
+        if self._current_stage and self._pipeline_panel:
+            self._pipeline_panel.update_from_name(
+                name=self._current_stage, status="failed",
+                message="已强制终止", detail="force killed",
+            )
+
+        # Cleanup incomplete files
+        _cleanup_killed_task_files(self.session.task_dir)
+
+        self._sync_session_panel()
+        self._update_status()
+        if self._composer:
+            self._composer.set_running(False)
+            self._composer.focus_input()
+        if self._heartbeat_timer is not None:
+            try:
+                self._heartbeat_timer.stop()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._heartbeat_timer = None
 
     def _heartbeat_running_task(self) -> None:
         """Periodic check: show 'still running' in the current stage card."""
