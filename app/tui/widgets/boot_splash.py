@@ -1,27 +1,27 @@
 from __future__ import annotations
 
-"""Boot splash screen with logo and preflight checks."""
+"""Boot splash screen with spinning logo and preflight checks."""
 
 import asyncio
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, Center
 from textual.screen import Screen
 from textual.widgets import Static
 
 from .. import theme as T
-from ..logo_loader import load_logo_text
+from ..logo_loader import load_logo_frames, FPS_INTERVAL, HAS_PIL, logo_exists
 from ..preflight import CheckItem, run_preflight
 
 
 class BootSplash(Screen):
-    """Full-screen preflight check display before main TUI."""
+    """Full-screen preflight check display with spinning logo."""
 
     DEFAULT_CSS = """
     BootSplash {
         align: center middle;
-        background: $surface;
+        background: black;
     }
     BootSplash #splash-logo {
         height: auto;
@@ -30,14 +30,13 @@ class BootSplash(Screen):
     }
     BootSplash #splash-checks {
         height: auto;
-        width: 54;
-        padding: 1 2;
-        color: $text-muted;
+        content-align: center middle;
+        color: #888888;
     }
     BootSplash #splash-status {
         height: 1;
         content-align: center middle;
-        color: $text-muted;
+        color: #888888;
         margin-top: 1;
     }
     """
@@ -53,6 +52,10 @@ class BootSplash(Screen):
         self._checks: list[CheckItem] = []
         self._done = False
         self._cancelled = False
+        self._frames: list = []
+        self._frame_idx = 0
+        self._playing = False
+        self._logo_timer = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -62,18 +65,37 @@ class BootSplash(Screen):
 
     def on_mount(self) -> None:
         try:
-            logo = load_logo_text()
+            self._frames = load_logo_frames()
         except Exception:
-            from rich.text import Text
-            logo = Text("", style="dim")
-        self.query_one("#splash-logo", Static).update(logo)
+            self._frames = []
+        if self._frames:
+            self.query_one("#splash-logo", Static).update(self._frames[0])
+            self._playing = True
+            self._logo_timer = self.set_interval(FPS_INTERVAL, self._next_frame)
         self.run_worker(self._run_checks(), exclusive=True)
 
+    def on_unmount(self) -> None:
+        self._playing = False
+        if self._logo_timer is not None:
+            self._logo_timer.stop()
+            self._logo_timer = None
+
+    def _next_frame(self) -> None:
+        if not self._playing or not self._frames:
+            return
+        try:
+            self._frame_idx = (self._frame_idx + 1) % len(self._frames)
+            self.query_one("#splash-logo", Static).update(self._frames[self._frame_idx])
+        except Exception:
+            self._playing = False
+
     def action_quit_app(self) -> None:
+        self._playing = False
         self.app.exit()
 
     def action_skip_splash(self) -> None:
         self._cancelled = True
+        self._playing = False
         self.dismiss([])
 
     async def _run_checks(self) -> None:
@@ -130,6 +152,7 @@ class BootSplash(Screen):
         if self._cancelled:
             return
 
+        self._playing = False
         status.update(f"[{T.FG_DIM}]正在进入 TUI…[/]")
         await asyncio.sleep(0.2)
 
@@ -138,11 +161,13 @@ class BootSplash(Screen):
 
     def _refresh_checks(self, widget: Static) -> None:
         lines: list[str] = []
+        left_w = 24
         for item in self._checks:
             icon = _icon_for(item.status)
             color = _color_for(item.status)
-            msg = item.message[:50] if item.message else ""
-            lines.append(f"[{color}]{icon} {item.name:<14}[/] [{T.FG_DIM}]{msg}[/]")
+            left = f"{icon} {item.name}"
+            msg = item.message[:52] if item.message else ""
+            lines.append(f"[{color}]{left:<{left_w}}[/][{T.FG_DIM}]{msg}[/]")
         widget.update("\n".join(lines))
 
 
@@ -151,4 +176,4 @@ def _icon_for(status: str) -> str:
 
 
 def _color_for(status: str) -> str:
-    return {"pending": T.FG_DIM, "running": T.INFO_BORDER, "pass": T.GREEN, "fail": T.ERROR_BORDER}.get(status, T.FG)
+    return {"pending": "#666666", "running": "#8be9fd", "pass": T.GREEN, "fail": T.ERROR_BORDER}.get(status, T.FG)

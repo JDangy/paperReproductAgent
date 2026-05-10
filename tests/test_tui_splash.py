@@ -2,13 +2,24 @@ from __future__ import annotations
 
 """Tests for boot splash, logo loader, and preflight fixes."""
 
-from app.tui.logo_loader import _pixel_to_char, _fallback_logo, load_logo_text
+from app.tui.logo_loader import (
+    _pixel_to_char,
+    _fallback_frame,
+    load_logo_text,
+    load_logo_frames,
+    HAS_PIL,
+    CAS_BLUE,
+    WHITE,
+    ansi_rgb,
+    FILL_CHARS,
+    OUTLINE_CHARS,
+)
 from app.tui.preflight import CheckItem
 
 
-def test_fallback_logo_not_project_text():
-    """Fallback logo must not contain 'Paper Reproduct Agent'."""
-    text = _fallback_logo()
+def test_fallback_frame_not_project_text():
+    """Fallback frame must not contain 'Paper Reproduct Agent'."""
+    text = _fallback_frame()
     assert "Paper" not in text.plain
     assert "Reproduct" not in text.plain
     assert "Agent" not in text.plain
@@ -68,6 +79,35 @@ def test_load_logo_text_returns_text_without_pil(monkeypatch):
     assert "Agent" not in text.plain
 
 
+def test_load_logo_frames_returns_list_without_pil(monkeypatch):
+    """When PIL is not available, load_logo_frames returns a single fallback frame."""
+    import app.tui.logo_loader as ll
+    monkeypatch.setattr(ll, "HAS_PIL", False)
+    frames = load_logo_frames()
+    assert isinstance(frames, list)
+    assert len(frames) >= 1
+
+
+def test_ansi_rgb_format():
+    """ansi_rgb should produce valid hex color strings."""
+    assert ansi_rgb(255, 255, 255) == "#ffffff"
+    assert ansi_rgb(23, 73, 148) == "#174994"
+    assert ansi_rgb(0, 0, 0) == "#000000"
+
+
+def test_color_constants():
+    """CAS_BLUE and WHITE should match the spec."""
+    assert WHITE == (255, 255, 255)
+    assert CAS_BLUE == (23, 73, 148)
+
+
+def test_char_sets_not_empty():
+    FILL_CHARS_str = FILL_CHARS
+    OUTLINE_CHARS_str = OUTLINE_CHARS
+    assert len(FILL_CHARS_str) > 0
+    assert len(OUTLINE_CHARS_str) > 0
+
+
 def test_boot_splash_uses_dismiss_not_only_callback():
     """BootSplash._run_checks should call dismiss(), not just _on_done callback."""
     from app.tui.widgets.boot_splash import BootSplash
@@ -102,16 +142,27 @@ def test_boot_splash_has_cancelled_guard():
     assert "self._cancelled" in source
 
 
+def test_boot_splash_has_animation_support():
+    """BootSplash should have _frames, _playing for logo animation."""
+    from app.tui.widgets.boot_splash import BootSplash
+    assert hasattr(BootSplash, "on_mount")
+    source = __import__("inspect").getsource(BootSplash.on_mount)
+    assert "load_logo_frames" in source
+
+
+def test_boot_splash_stops_animation_on_dismiss():
+    """BootSplash should stop animation on skip/quit."""
+    from app.tui.widgets.boot_splash import BootSplash
+    import inspect
+    skip_source = inspect.getsource(BootSplash.action_skip_splash)
+    assert "self._playing = False" in skip_source
+
+
 def test_boot_splash_always_dismisses():
     """BootSplash._run_checks must always call dismiss, even with blocking failures."""
     from app.tui.widgets.boot_splash import BootSplash
     import inspect
     source = inspect.getsource(BootSplash._run_checks)
-    lines_after_blocking = False
-    for line in source.splitlines():
-        if "blocking" in line and "将进入" in source:
-            lines_after_blocking = True
-    # dismiss must appear (regardless of blocking count)
     assert "self.dismiss(results)" in source
 
 
@@ -120,12 +171,8 @@ def test_pillow_is_non_blocking_in_preflight():
     from app.tui.preflight import run_preflight
     import inspect
     source = inspect.getsource(run_preflight)
-    # Find the Pillow check
     pillow_idx = source.find("依赖 Pillow")
     assert pillow_idx != -1
-    # Check that there's no blocking=True near the Pillow fail case
-    fail_idx = source.find("fail", pillow_idx)
-    # Get the context around the Pillow fail record
     context = source[pillow_idx:pillow_idx + 120]
     assert "blocking=False" in context or "非阻塞" in context
 
