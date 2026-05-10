@@ -3,12 +3,11 @@ from __future__ import annotations
 """Boot splash screen with logo and preflight checks."""
 
 import asyncio
-import time
 
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical
+from textual.binding import Binding
+from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widget import Widget
 from textual.widgets import Static
 
 from .. import theme as T
@@ -43,11 +42,17 @@ class BootSplash(Screen):
     }
     """
 
-    def __init__(self, on_done=None, **kwargs) -> None:
+    BINDINGS = [
+        Binding("ctrl+c", "quit_app", "退出", show=False),
+        Binding("q", "quit_app", "退出", show=False),
+        Binding("escape", "skip_splash", "跳过", show=False),
+    ]
+
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._on_done = on_done
         self._checks: list[CheckItem] = []
         self._done = False
+        self._cancelled = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -60,9 +65,16 @@ class BootSplash(Screen):
             logo = load_logo_text()
         except Exception:
             from rich.text import Text
-            logo = Text("Paper Reproduct Agent", style="bold #bd93f9")
+            logo = Text("", style="dim")
         self.query_one("#splash-logo", Static).update(logo)
         self.run_worker(self._run_checks(), exclusive=True)
+
+    def action_quit_app(self) -> None:
+        self.app.exit()
+
+    def action_skip_splash(self) -> None:
+        self._cancelled = True
+        self.dismiss([])
 
     async def _run_checks(self) -> None:
         status = self.query_one("#splash-status", Static)
@@ -71,26 +83,43 @@ class BootSplash(Screen):
         status.update("正在检查系统环境……")
 
         results = await asyncio.to_thread(run_preflight)
-        self._checks = results
 
-        for i, item in enumerate(results):
-            item.status = "running"
+        if self._cancelled:
+            return
+
+        animated: list[CheckItem] = [
+            CheckItem(name=item.name, status="pending", message="", blocking=item.blocking)
+            for item in results
+        ]
+        self._checks = animated
+        self._refresh_checks(checks)
+
+        for i, final_item in enumerate(results):
+            if self._cancelled:
+                return
+
+            animated[i].status = "running"
+            animated[i].message = "正在检查……"
             self._refresh_checks(checks)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.12)
 
-            # Actually run was already done; we just animate
-            item.status = item.status  # preserve
+            animated[i].status = final_item.status
+            animated[i].message = final_item.message
+            animated[i].blocking = final_item.blocking
             self._refresh_checks(checks)
 
-        await asyncio.sleep(0.5)
+        if self._cancelled:
+            return
 
-        # Show completion
         passes = sum(1 for c in results if c.status == "pass")
         fails = sum(1 for c in results if c.status == "fail")
         blocking = sum(1 for c in results if c.status == "fail" and c.blocking)
 
         if blocking > 0:
-            status.update(f"[{T.ERROR_BORDER}]检查完成：{passes} 通过，{fails} 失败（{blocking} 项阻塞）[/]")
+            status.update(
+                f"[{T.ERROR_BORDER}]检查完成：{passes} 通过，{fails} 失败"
+                f"（{blocking} 项阻塞，将进入 TUI 显示警告）[/]"
+            )
         elif fails > 0:
             status.update(f"[{T.WARNING_BORDER}]检查完成：{passes} 通过，{fails} 项非阻塞警告[/]")
         else:
@@ -98,9 +127,14 @@ class BootSplash(Screen):
 
         await asyncio.sleep(1.0)
 
-        if self._on_done:
-            self._on_done(results)
+        if self._cancelled:
+            return
+
+        status.update(f"[{T.FG_DIM}]正在进入 TUI…[/]")
+        await asyncio.sleep(0.2)
+
         self._done = True
+        self.dismiss(results)
 
     def _refresh_checks(self, widget: Static) -> None:
         lines: list[str] = []

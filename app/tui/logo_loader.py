@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Load and render logo/logo.png as Rich Text frames for Textual splash."""
+"""Load and render logo/logo.png as Rich Text for Textual splash."""
 
 from pathlib import Path
 from rich.text import Text
@@ -15,7 +15,7 @@ from app.core.paths import find_project_root
 
 LOGO_PATH = find_project_root() / "logo" / "logo.png"
 FRAME_WIDTH = 50
-FRAME_HEIGHT = 12
+FRAME_HEIGHT = 14
 CHARS = " .:-=+*#%@"
 
 
@@ -27,41 +27,60 @@ def logo_exists() -> bool:
     return LOGO_PATH.exists()
 
 
-def _resize_image(img) -> object:
-    """Resize image to fit terminal frame while preserving aspect ratio."""
-    w, h = img.size
-    scale = min(FRAME_WIDTH / w, FRAME_HEIGHT * 2 / h)
-    new_w = max(4, int(w * scale))
-    new_h = max(4, int(h * scale / 2))
-    return img.resize((new_w, new_h), Image.LANCZOS)  # type: ignore[union-attr]
-
-
-def _pixel_to_char(gray: int) -> str:
-    idx = int(gray / 256 * len(CHARS))
+def _pixel_to_char(gray: int, alpha: int = 255) -> str:
+    if alpha < 128:
+        return " "
+    darkness = 255 - gray
+    idx = int(darkness / 256 * len(CHARS))
     return CHARS[min(idx, len(CHARS) - 1)]
 
 
-def load_logo_text() -> Text:
+def _crop_white_border(img: "Image.Image") -> "Image.Image":
+    bbox = img.getbbox()
+    if bbox:
+        return img.crop(bbox)
+    return img
+
+
+def _resize_image(img: "Image.Image", lines: int = FRAME_HEIGHT) -> "Image.Image":
+    w, h = img.size
+    scale = min(FRAME_WIDTH / w, lines * 2 / h)
+    new_w = max(4, int(w * scale))
+    new_h = max(4, int(h * scale / 2))
+    return img.resize((new_w, new_h), Image.LANCZOS)
+
+
+def load_logo_text(lines: int = FRAME_HEIGHT) -> Text:
     """Load logo and convert to Rich Text (static frame)."""
     if not HAS_PIL or not LOGO_PATH.exists():
         return _fallback_logo()
 
     try:
-        img = Image.open(LOGO_PATH).convert("L")
-        img = _resize_image(img)
-        lines: list[str] = []
+        img = Image.open(LOGO_PATH)
+
+        if img.mode == "RGBA":
+            bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+
+        img = _crop_white_border(img)
+        img = img.convert("L")
+        img = _resize_image(img, lines)
+
+        text_lines: list[str] = []
         for y in range(img.height):
             row = "".join(_pixel_to_char(img.getpixel((x, y))) for x in range(img.width))
-            lines.append(row)
+            text_lines.append(row)
+
         text = Text()
-        for i, line in enumerate(lines):
+        for i, line in enumerate(text_lines):
             if i > 0:
                 text.append("\n")
-            text.append(line, style="dim #6c7086")
+            text.append(line, style="#bd93f9")
         return text
     except Exception:
         return _fallback_logo()
 
 
 def _fallback_logo() -> Text:
-    return Text("Paper\nReproduct\nAgent", style="bold #bd93f9", justify="center")
+    return Text("", style="dim")

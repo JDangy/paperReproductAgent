@@ -21,6 +21,7 @@ GitPython = "^3.1"
 pyyaml = "^6.0"
 openai = "^1.30"
 textual = ">=0.80"
+Pillow = ">=10"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

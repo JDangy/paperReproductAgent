@@ -553,12 +553,16 @@ def tui(
     backend: str = typer.Option(settings.default_backend, "--backend", help="Execution backend: none, local, venv, conda, or docker"),
     timeout_minutes: int = typer.Option(settings.default_timeout_minutes, "--timeout-minutes"),
     max_repair_attempts: int = typer.Option(settings.default_max_repair_attempts, "--max-repair-attempts"),
+    no_splash: bool = typer.Option(False, "--no-splash", help="Skip the splash / preflight screen"),
 ):
     """Launch the OpenCode-inspired terminal UI."""
     sanitize_proxy_env()
     if backend not in ("none", "local", "venv", "conda", "docker"):
         console.print(f"[red]Invalid backend: {backend}. Must be none, local, venv, conda, or docker.[/red]")
         raise typer.Exit(1)
+
+    import os
+    skip = no_splash or bool(os.environ.get("PRA_SKIP_SPLASH"))
 
     from app.tui import run_tui
     from app.core.paths import resolve_workspace_path
@@ -570,6 +574,7 @@ def tui(
         backend=backend,
         timeout_minutes=timeout_minutes,
         max_repair_attempts=max_repair_attempts,
+        skip_splash=skip,
     )
 
 

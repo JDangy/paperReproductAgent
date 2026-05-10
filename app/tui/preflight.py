@@ -92,7 +92,7 @@ def run_preflight() -> list[CheckItem]:
         from PIL import Image as _  # noqa: F401
         _record(results, "依赖 Pillow", "pass", "已安装")
     except ImportError:
-        _record(results, "依赖 Pillow", "fail", "未安装（logo 将显示文字替代）", blocking=False)
+        _record(results, "依赖 Pillow", "fail", "未安装（院徽 logo 无法渲染，非阻塞）", blocking=False)
 
     # 9. CUDA (non-blocking)
     nvidia_smi = shutil.which("nvidia-smi")
@@ -112,8 +112,8 @@ def run_preflight() -> list[CheckItem]:
     # 10. Network
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", "import urllib.request; urllib.request.urlopen('https://pypi.org', timeout=5)"],
-            capture_output=True, timeout=10,
+            [sys.executable, "-c", "import urllib.request; urllib.request.urlopen('https://pypi.org', timeout=3)"],
+            capture_output=True, timeout=5,
         )
         if proc.returncode == 0:
             _record(results, "网络连接", "pass", "PyPI 可达")

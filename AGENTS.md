@@ -128,3 +128,21 @@ Each adapter has three levels (L1–L3). The planner auto-downgrades when higher
 3. **Workspace collisions**: task IDs are timestamp-based with a retry loop (100 attempts). Rarely conflicts.
 4. **Import order**: `from app.core.config import settings` must come after `.env` is loaded (handled by pydantic-settings on first import).
 5. **TUI is separate**: the Textual TUI (`app/tui/app.py`) has its own event loop and session management. The `paper-smoke` CLI and TUI share the same agents but different orchestration.
+
+## 通用规则
+
+1. **每次改动代码后必须重新构建、本地提交、推送 GitHub，然后在最后汇报。**
+   - 依赖变更时：`F:\Anaconda\envs\paper_smoke\python.exe -m pip install -e . --no-deps` 或 `poetry install`
+   - 提交：`git add -A && git commit -m "简明描述"`
+   - 推送：`git push origin HEAD`
+   - 汇报格式：commit hash range、branch、变更摘要
+   - 不允许留下未提交或未推送的变更
+
+2. **回答默认用中文。**
+
+3. **网络代理**：如果遇到网络问题（如 `git push`、`pip install`、`poetry install` 失败），优先尝试本地 `http://127.0.0.1:7890` 代理：
+   ```bash
+   export https_proxy=http://127.0.0.1:7890
+   export http_proxy=http://127.0.0.1:7890
+   ```
+   如果设置了代理仍无法连接，立即向用户汇报，不要自行跳过推送或提交步骤。

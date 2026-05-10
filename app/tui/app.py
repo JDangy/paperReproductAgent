@@ -43,11 +43,6 @@ def _looks_like_arxiv(value: str) -> bool:
     )
 
 
-def _make_splash(on_done):
-    from .widgets.boot_splash import BootSplash
-    return BootSplash(on_done=on_done)
-
-
 def _cleanup_killed_task_files(task_dir: str | None) -> None:
     if not task_dir:
         return
@@ -233,11 +228,13 @@ class PaperAgentApp(App):
 
     def on_mount(self) -> None:
         if not self._skip_splash:
-            self.push_screen(_make_splash(self._on_splash_done))
+            from .widgets.boot_splash import BootSplash
+            self.push_screen(BootSplash(), callback=self._on_splash_done)
             return
         self._on_mount_ready()
 
-    def _on_splash_done(self, _results=None) -> None:
+    def _on_splash_done(self, results=None) -> None:
+        self._preflight_results = results or []
         self._on_mount_ready()
 
     def _on_mount_ready(self) -> None:
@@ -263,6 +260,18 @@ class PaperAgentApp(App):
         )
         self._update_status()
         self._sync_session_panel()
+        self._show_preflight_warnings()
+
+    def _show_preflight_warnings(self) -> None:
+        results = getattr(self, "_preflight_results", None) or []
+        failed = [r for r in results if getattr(r, "status", "") == "fail"]
+        if not failed:
+            return
+        lines = ["启动检查存在警告：", ""]
+        for item in failed:
+            level = "阻塞项" if getattr(item, "blocking", False) else "非阻塞"
+            lines.append(f"- {item.name}：{item.message}（{level}）")
+        self._add_assistant("\n".join(lines))
 
     # ── Message helpers ──────────────────────────────────────
 
