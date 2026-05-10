@@ -32,7 +32,12 @@ class CondaBuildAgent:
 
     def run(self, state: TaskState) -> TaskState:
         if not state.repo_evaluation or not state.repo_evaluation.repo_dir:
-            emit_progress("Build conda env", "skipped", level="warning", detail="repo was not evaluated")
+            emit_progress(
+                "Build conda env",
+                "skipped",
+                level="warning",
+                detail="repo was not evaluated",
+            )
             state.env_build = EnvironmentBuildResult(
                 build_success=False,
                 failure_summary="Repo not evaluated",
@@ -48,7 +53,9 @@ class CondaBuildAgent:
         conda_env_dir = Path(state.workspace_dir).resolve() / "envs" / paper_slug
         build_log_path = env_dir / "conda_build.log"
         repo_dir = Path(state.repo_evaluation.repo_dir).resolve()
-        python_bin = conda_env_dir / ("python.exe" if sys.platform == "win32" else "bin/python")
+        python_bin = conda_env_dir / (
+            "python.exe" if sys.platform == "win32" else "bin/python"
+        )
 
         result = EnvironmentBuildResult(
             environment_path=str(conda_env_dir),
@@ -66,13 +73,22 @@ class CondaBuildAgent:
 
             if python_bin.exists():
                 result.build_success = True
-                result.install_actions.append({
-                    "action": "reuse_conda_env",
-                    "paper_slug": paper_slug,
-                    "environment_path": str(conda_env_dir),
-                })
-                log_parts.append(f"Reusing existing paper-named conda environment: {conda_env_dir}")
-                emit_progress("Build conda env", "reused existing environment", level="success", detail=str(conda_env_dir))
+                result.install_actions.append(
+                    {
+                        "action": "reuse_conda_env",
+                        "paper_slug": paper_slug,
+                        "environment_path": str(conda_env_dir),
+                    }
+                )
+                log_parts.append(
+                    f"Reusing existing paper-named conda environment: {conda_env_dir}"
+                )
+                emit_progress(
+                    "Build conda env",
+                    "reused existing environment",
+                    level="success",
+                    detail=str(conda_env_dir),
+                )
                 _write_marker(conda_env_dir, state, paper_slug, python_bin)
                 build_log_path.write_text("\n".join(log_parts), encoding="utf-8")
                 state.env_build = result
@@ -86,7 +102,15 @@ class CondaBuildAgent:
 
             python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
             self._run_step(
-                [conda, "create", "-y", "-p", str(conda_env_dir), f"python={python_version}", "pip"],
+                [
+                    conda,
+                    "create",
+                    "-y",
+                    "-p",
+                    str(conda_env_dir),
+                    f"python={python_version}",
+                    "pip",
+                ],
                 cwd=repo_dir,
                 deadline=deadline,
                 log_parts=log_parts,
@@ -106,25 +130,41 @@ class CondaBuildAgent:
             # Install PyTorch per runtime decision
             if state.runtime_decision and state.runtime_decision.install_plan:
                 for i, plan_cmd in enumerate(state.runtime_decision.install_plan):
-                    resolved = [str(python_bin) if p == "python" else p for p in plan_cmd]
+                    resolved = [
+                        str(python_bin) if p == "python" else p for p in plan_cmd
+                    ]
                     self._run_step(
-                        resolved, cwd=repo_dir, deadline=deadline,
+                        resolved,
+                        cwd=repo_dir,
+                        deadline=deadline,
                         log_parts=log_parts,
                         step_name=f"install pytorch runtime ({i + 1}/{len(state.runtime_decision.install_plan)})",
                     )
 
             for requirements_path in find_requirement_files(repo_dir):
-                display_req = _safe_display_path(requirements_path, repo_dir=repo_dir, task_dir=task_dir)
+                display_req = _safe_display_path(
+                    requirements_path, repo_dir=repo_dir, task_dir=task_dir
+                )
                 # Filter torch family if runtime_decision exists
                 if state.runtime_decision:
-                    original = requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+                    original = requirements_path.read_text(
+                        encoding="utf-8", errors="ignore"
+                    ).splitlines()
                     filtered = strip_torch_family_requirements(original)
                     if filtered != original:
-                        filtered_path = env_dir / f"{requirements_path.stem}_no_torch.txt"
-                        filtered_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
-                        log_parts.append(f"Filtered torch family from {requirements_path.name} per runtime decision")
+                        filtered_path = (
+                            env_dir / f"{requirements_path.stem}_no_torch.txt"
+                        )
+                        filtered_path.write_text(
+                            "\n".join(filtered) + "\n", encoding="utf-8"
+                        )
+                        log_parts.append(
+                            f"Filtered torch family from {requirements_path.name} per runtime decision"
+                        )
                         requirements_path = filtered_path
-                        display_req = _safe_display_path(requirements_path, repo_dir=repo_dir, task_dir=task_dir)
+                        display_req = _safe_display_path(
+                            requirements_path, repo_dir=repo_dir, task_dir=task_dir
+                        )
                 self._install_requirements_with_relax_retry(
                     pip_cmd=pip_cmd,
                     requirements_path=requirements_path,
@@ -138,7 +178,9 @@ class CondaBuildAgent:
             env_requirements = extract_pip_requirements_from_environment_file(repo_dir)
             if env_requirements:
                 env_req_path = env_dir / "environment_requirements.txt"
-                env_req_path.write_text("\n".join(env_requirements) + "\n", encoding="utf-8")
+                env_req_path.write_text(
+                    "\n".join(env_requirements) + "\n", encoding="utf-8"
+                )
                 self._install_requirements_with_relax_retry(
                     pip_cmd=pip_cmd,
                     requirements_path=env_req_path,
@@ -150,8 +192,11 @@ class CondaBuildAgent:
                 )
 
             if state.repo_evaluation.has_setup_py_or_pyproject:
+                # --no-build-isolation: many repos (detectron2, CLIP, etc.)
+                # import torch at module level in setup.py, which fails in
+                # pip's temporary isolated build environment.
                 self._run_step(
-                    [*pip_cmd, "install", "-e", "."],
+                    [*pip_cmd, "install", "-e", ".", "--no-build-isolation"],
                     cwd=repo_dir,
                     deadline=deadline,
                     log_parts=log_parts,
@@ -184,12 +229,19 @@ class CondaBuildAgent:
                 result.failure_summary = "Could not find conda executable"
             else:
                 result.failure_summary = f"Conda environment build failed during {e.step_name} with exit code {e.returncode}"
-            emit_progress("Build conda env", "build step failed", level="error", detail=result.failure_summary)
+            emit_progress(
+                "Build conda env",
+                "build step failed",
+                level="error",
+                detail=result.failure_summary,
+            )
         except Exception as e:
             result.build_success = False
             result.failure_type = "unknown"
             result.failure_summary = str(e)
-            emit_progress("Build conda env", "build error", level="error", detail=str(e))
+            emit_progress(
+                "Build conda env", "build error", level="error", detail=str(e)
+            )
 
         build_log_path.write_text("\n".join(log_parts), encoding="utf-8")
         state.env_build = result
@@ -210,12 +262,20 @@ class CondaBuildAgent:
     ) -> None:
         # 1) Try with pinned versions (>= → ==, > → bumped)
         pinned_path = env_dir / f"{requirements_path.stem}_conda_pinned.txt"
-        original_lines = requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        original_lines = requirements_path.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines()
         pinned_lines = [pin_requirement_line(line) for line in original_lines]
         if pinned_lines != original_lines:
             pinned_path.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
-            log_parts.append(f"Pinning versions: {requirements_path.name} → {pinned_path.name}")
-            emit_progress("Build conda env", "installing with pinned versions", detail=requirements_path.name)
+            log_parts.append(
+                f"Pinning versions: {requirements_path.name} → {pinned_path.name}"
+            )
+            emit_progress(
+                "Build conda env",
+                "installing with pinned versions",
+                detail=requirements_path.name,
+            )
             installed = self._try_run_step(
                 [*pip_cmd, "install", "-r", str(pinned_path)],
                 cwd=repo_dir,
@@ -238,7 +298,12 @@ class CondaBuildAgent:
             return
 
         # 3) Fall back to relaxed (strip version pins), but cap numpy <2 for API compat
-        emit_progress("Build conda env", "retrying relaxed requirements", level="warning", detail=requirements_path.name)
+        emit_progress(
+            "Build conda env",
+            "retrying relaxed requirements",
+            level="warning",
+            detail=requirements_path.name,
+        )
 
         relaxed_path = env_dir / f"{requirements_path.stem}_conda_relaxed.txt"
         relaxed_lines: list[str] = []
@@ -308,14 +373,24 @@ class CondaBuildAgent:
         emit_progress("Build conda env", step_name, detail=display_cmd)
 
         proc = subprocess.Popen(
-            argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="ignore", bufsize=1,
+            argv,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            bufsize=1,
         )
         q: Queue[tuple[str, str]] = Queue()
         if proc.stdout is not None:
-            Thread(target=_enqueue, args=(proc.stdout, q, "stdout"), daemon=True).start()
+            Thread(
+                target=_enqueue, args=(proc.stdout, q, "stdout"), daemon=True
+            ).start()
         if proc.stderr is not None:
-            Thread(target=_enqueue, args=(proc.stderr, q, "stderr"), daemon=True).start()
+            Thread(
+                target=_enqueue, args=(proc.stderr, q, "stderr"), daemon=True
+            ).start()
 
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
@@ -349,10 +424,13 @@ class CondaBuildAgent:
                 if visible and visible != last_visible and now - last_emit >= 1.0:
                     last_visible = visible
                     last_emit = now
-                    emit_progress("Build conda env", step_name,
-                                  detail=None,
-                                  log_lines=list(visible),
-                                  cli_stream=True)
+                    emit_progress(
+                        "Build conda env",
+                        step_name,
+                        detail=None,
+                        log_lines=list(visible),
+                        cli_stream=True,
+                    )
                     pending.clear()
 
                 if proc.poll() is not None:
@@ -375,10 +453,13 @@ class CondaBuildAgent:
                     pending.append(clean)
 
             if pending:
-                emit_progress("Build conda env", step_name,
-                              detail=None,
-                              log_lines=pending[-5:],
-                              cli_stream=True)
+                emit_progress(
+                    "Build conda env",
+                    step_name,
+                    detail=None,
+                    log_lines=pending[-5:],
+                    cli_stream=True,
+                )
 
             stdout = "".join(stdout_parts)
             stderr = "".join(stderr_parts)
@@ -390,8 +471,12 @@ class CondaBuildAgent:
             if proc.returncode == 0:
                 emit_progress("Build conda env", f"{step_name} done", level="success")
             else:
-                emit_progress("Build conda env", f"{step_name} failed", level="warning",
-                              detail=f"exit {proc.returncode}")
+                emit_progress(
+                    "Build conda env",
+                    f"{step_name} failed",
+                    level="warning",
+                    detail=f"exit {proc.returncode}",
+                )
             return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
         except Exception:
@@ -443,7 +528,7 @@ def _clip_for_tui(line: str, limit: int = 240) -> str:
     """Clip a log line for TUI display; full content stays in log_parts."""
     if len(line) <= limit:
         return line
-    return line[:limit - 3] + "..."
+    return line[: limit - 3] + "..."
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -465,24 +550,40 @@ def _repo_needs_audio_runtime_helper(repo_dir: Path) -> bool:
     readme_text = ""
     for readme in repo_dir.glob("README*"):
         readme_text += readme.read_text(encoding="utf-8", errors="ignore").lower()
-    return any(term in readme_text for term in ("ffmpeg", "audio", "transcribe", "speech"))
+    return any(
+        term in readme_text for term in ("ffmpeg", "audio", "transcribe", "speech")
+    )
 
 
-def _bridge_preferred_runtime(conda_env_dir: Path, log_parts: list[str], result: EnvironmentBuildResult) -> None:
+def _bridge_preferred_runtime(
+    conda_env_dir: Path, log_parts: list[str], result: EnvironmentBuildResult
+) -> None:
     preferred_env = Path("/home/duyuan/miniconda3/envs/torch_py39_env")
-    preferred_site = preferred_env / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-    target_site = conda_env_dir / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    preferred_site = (
+        preferred_env
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    target_site = (
+        conda_env_dir
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
     if not preferred_site.exists() or not target_site.exists():
         return
     pth_path = target_site / "paper_repro_preferred_runtime.pth"
     pth_path.write_text(str(preferred_site) + "\n", encoding="utf-8")
     message = f"Linked preferred runtime site-packages via {pth_path}: {preferred_site}"
     log_parts.append(message)
-    result.install_actions.append({
-        "action": "bridge_preferred_runtime",
-        "source": str(preferred_site),
-        "path": str(pth_path),
-    })
+    result.install_actions.append(
+        {
+            "action": "bridge_preferred_runtime",
+            "source": str(preferred_site),
+            "path": str(pth_path),
+        }
+    )
 
 
 def _write_marker(env_dir: Path, state: TaskState, slug: str, python_bin: Path) -> None:
@@ -502,7 +603,9 @@ def _write_marker(env_dir: Path, state: TaskState, slug: str, python_bin: Path) 
         pass  # non-critical
 
 
-def _safe_display_path(path: Path, *, repo_dir: Path, task_dir: Path | None = None) -> str:
+def _safe_display_path(
+    path: Path, *, repo_dir: Path, task_dir: Path | None = None
+) -> str:
     """Display a path relative to repo_dir, task_dir, or just the filename."""
     path = Path(path).resolve()
     repo_dir = Path(repo_dir).resolve()

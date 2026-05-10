@@ -59,20 +59,47 @@ class PaperUnderstandingAgent:
         parsed_text_path = task_dir / "paper" / "parsed_text.txt"
 
         if not parsed_text_path.exists():
-            state.errors.append({"agent": "PaperUnderstandingAgent", "error": "parsed_text.txt not found"})
+            state.errors.append(
+                {
+                    "agent": "PaperUnderstandingAgent",
+                    "error": "parsed_text.txt not found",
+                }
+            )
             state.status = "failed"
-            emit_progress("Understand paper", "parsed text missing", level="error", detail=str(parsed_text_path))
+            emit_progress(
+                "Understand paper",
+                "parsed text missing",
+                level="error",
+                detail=str(parsed_text_path),
+            )
             return state
 
-        emit_progress("Understand paper", "loading parsed paper text", detail=str(parsed_text_path))
+        emit_progress(
+            "Understand paper",
+            "loading parsed paper text",
+            detail=str(parsed_text_path),
+        )
         text = parsed_text_path.read_text(encoding="utf-8", errors="ignore")
-        emit_progress("Understand paper", "loaded paper text", detail=f"{len(text):,} characters", text_chars=len(text))
+        emit_progress(
+            "Understand paper",
+            "loaded paper text",
+            detail=f"{len(text):,} characters",
+            text_chars=len(text),
+        )
 
-        emit_progress("Understand paper", "asking LLM for reproduction brief", detail="task, datasets, metrics, GitHub links")
+        emit_progress(
+            "Understand paper",
+            "asking LLM for reproduction brief",
+            detail="task, datasets, metrics, GitHub links",
+        )
         brief = self._llm_understand(text)
         if brief is None:
             logger.info("LLM unavailable or failed, falling back to heuristic parsing")
-            emit_progress("Understand paper", "LLM brief unavailable, using heuristics", level="warning")
+            emit_progress(
+                "Understand paper",
+                "LLM brief unavailable, using heuristics",
+                level="warning",
+            )
             brief = self._heuristic_understand(text)
         else:
             emit_progress(
@@ -87,7 +114,11 @@ class PaperUnderstandingAgent:
                 brief.github_links_in_paper,
                 extract_reproduction_links(text),
             )
-        emit_progress("Understand paper", "extracting benchmark protocol", detail="tables, splits, metrics, reference values")
+        emit_progress(
+            "Understand paper",
+            "extracting benchmark protocol",
+            detail="tables, splits, metrics, reference values",
+        )
         protocol = self._llm_extract_protocol(text)
         if protocol:
             brief.benchmark_protocol = protocol
@@ -98,12 +129,17 @@ class PaperUnderstandingAgent:
                 protocol_confidence=protocol.get("confidence"),
             )
         else:
-            emit_progress("Understand paper", "benchmark protocol unavailable", level="warning")
+            emit_progress(
+                "Understand paper", "benchmark protocol unavailable", level="warning"
+            )
 
         state.reproduction_brief = brief
         save_json(task_dir / "paper" / "reproduction_brief.json", brief)
         if brief.benchmark_protocol:
-            save_json(task_dir / "paper" / "benchmark_protocol_brief.json", brief.benchmark_protocol)
+            save_json(
+                task_dir / "paper" / "benchmark_protocol_brief.json",
+                brief.benchmark_protocol,
+            )
         emit_progress(
             "Understand paper",
             "saved reproduction brief",
@@ -147,7 +183,9 @@ class PaperUnderstandingAgent:
             datasets=extract_datasets(text),
             metrics=extract_metrics(text),
             method_keywords=extract_method_keywords(text),
-            github_links_in_paper=_merge_links(extract_github_links(text), extract_reproduction_links(text)),
+            github_links_in_paper=_merge_links(
+                extract_github_links(text), extract_reproduction_links(text)
+            ),
             confidence=0.5,
         )
 
@@ -168,9 +206,31 @@ def _merge_links(primary: list[str], secondary: list[str]) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
     for link in [*primary, *secondary]:
-        key = link.lower().rstrip("/")
+        cleaned = _clean_github_url(link)
+        if not cleaned:
+            continue
+        key = cleaned.lower().rstrip("/")
         if key in seen:
             continue
         seen.add(key)
-        merged.append(link)
+        merged.append(cleaned)
     return merged
+
+
+def _clean_github_url(url: str) -> str | None:
+    """Remove trailing sentence fragments from extracted GitHub URLs.
+
+    PDF text extraction often concatenates sentence-ending periods
+    with section headings, producing artifacts like:
+      https://github.com/OpenAI/CLIP.1.Introduction
+    """
+    import re as _re
+
+    url = url.strip().rstrip(".,;:)#?]}")
+    if not url.startswith(("http://", "https://", "git@")):
+        return None
+
+    parsed = _re.match(r"(https?://github\.com/[\w\-\.]+/[\w\-\.]+)", url)
+    if parsed:
+        return parsed.group(1).rstrip(".,;:)#?]}")
+    return url
