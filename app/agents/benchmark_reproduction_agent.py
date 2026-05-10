@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from app.agents.smoke_run_agent import SmokeRunAgent, classify_smoke_failure
+from app.benchmark.device import is_cuda_available_for_state
 from app.benchmark.comparator import compare_metrics, protocol_match
 from app.benchmark.llm_planner import apply_llm_review, llm_review_benchmark_plan
 from app.benchmark.parsers import parse_metrics
@@ -61,6 +62,11 @@ class BenchmarkReproductionAgent:
         result.candidate_specs = specs
         result.eligible = bool(specs)
 
+        # If CUDA unavailable, prefer CPU specs
+        repo_dir = Path(state.repo_evaluation.repo_dir).resolve()
+        if not is_cuda_available_for_state(state, repo_dir):
+            emit_progress("Run benchmark reproduction", "CUDA 不可用，优先选择 CPU benchmark",
+                          level="warning", detail="当前 PyTorch 不支持 CUDA，降级为 CPU")
         selected = select_best_benchmark(specs, budget)
         result.selected_spec = selected
         result.downgrade_reasons = downgrade_reasons(specs, selected, budget)
@@ -90,6 +96,16 @@ class BenchmarkReproductionAgent:
             self._execute_selected_benchmark(result, selected, state, task_dir, run_dir, deadline)
             if result.success or result.skipped:
                 break
+
+            # CUDA failure → try CPU fallback from same spec
+            if result.failure_type == "cuda_unavailable":
+                cpu_spec = _cpu_fallback_spec(selected)
+                if cpu_spec and cpu_spec.id not in tried_ids:
+                    emit_progress("Run benchmark reproduction", "CUDA 失败，尝试 CPU fallback",
+                                  level="warning", detail=f"{cpu_spec.level} {cpu_spec.title}")
+                    selected = cpu_spec
+                    continue
+
             fallback = self._fallback_benchmark(specs, selected, tried_ids, budget)
             if fallback is None:
                 break
@@ -429,3 +445,46 @@ def _json_dumps(value: dict) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=False)
+
+
+def _cpu_fallback_spec(spec) -> object | None:
+    """Create a CPU-fallback version of a CUDA benchmark spec."""
+    from app.benchmark.schema import BenchmarkSpec
+    cmd = list(spec.command)
+    lowered = [str(x).lower() for x in cmd]
+    if "--device" not in lowered:
+        return None
+    idx = lowered.index("--device")
+    if idx + 1 >= len(cmd) or cmd[idx + 1].lower() != "cuda":
+        return None
+    cmd[idx + 1] = "cpu"
+
+    if "--repeat" in lowered:
+        ridx = lowered.index("--repeat")
+        if ridx + 1 < len(cmd):
+            cmd[ridx + 1] = "1"
+
+    if "--num_keypoints" in lowered:
+        kidx = lowered.index("--num_keypoints")
+        new_cmd = []
+        i = 0
+        while i < len(cmd):
+            if str(cmd[i]).lower() == "--num_keypoints":
+                new_cmd.extend(["--num_keypoints", "512"])
+                i += 1
+                while i < len(cmd) and not str(cmd[i]).startswith("--"):
+                    i += 1
+                continue
+            new_cmd.append(cmd[i])
+            i += 1
+        cmd = new_cmd
+
+    return BenchmarkSpec(
+        id=spec.id + "_cpu",
+        title=spec.title + " CPU",
+        level="L1",
+        command=cmd,
+        task_family=spec.task_family,
+        runnable=True,
+        command_kind=spec.command_kind,
+    )
