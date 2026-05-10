@@ -6,12 +6,12 @@ import asyncio
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, Center
+from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
 from .. import theme as T
-from ..logo_loader import load_logo_frames, FPS_INTERVAL, HAS_PIL, logo_exists
+from ..logo_loader import load_logo_frames, FPS_INTERVAL, LINES
 from ..preflight import CheckItem, run_preflight
 
 
@@ -26,6 +26,8 @@ class BootSplash(Screen):
     BootSplash #splash-logo {
         height: auto;
         content-align: center middle;
+        text-wrap: nowrap;
+        overflow: hidden;
         margin-bottom: 1;
     }
     BootSplash #splash-checks {
@@ -65,7 +67,11 @@ class BootSplash(Screen):
 
     def on_mount(self) -> None:
         try:
-            self._frames = load_logo_frames()
+            available_width = max(60, self.size.width - 4)
+        except Exception:
+            available_width = 100
+        try:
+            self._frames = load_logo_frames(max_width=available_width)
         except Exception:
             self._frames = []
         if self._frames:
