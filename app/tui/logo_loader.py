@@ -3,8 +3,8 @@ from __future__ import annotations
 """Load and render logo/logo.png as animated Rich Text frames for Textual splash.
 
 Implements the spinning ring logo with blue-white gradient.
-The logo image is rotated via PIL, and the color gradient is fixed
-in screen coordinates — no "clock hand" color sweep.
+Outer ring is fixed, inner content rotates via PIL Image.rotate.
+Gradient uses fixed screen-coordinate bounds (no clock-hand sweep).
 """
 
 import math
@@ -12,7 +12,7 @@ from pathlib import Path
 from rich.text import Text
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageDraw
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -28,9 +28,6 @@ CLOCKWISE = True
 
 WHITE = (255, 255, 255)
 CAS_BLUE = (23, 73, 148)
-
-FILL_CHARS = " .:=*#%@"
-OUTLINE_CHARS = ".,:;i1tfLCG08@"
 
 
 def has_pil() -> bool:
@@ -54,114 +51,164 @@ def real_rotation_angle(deg: int, clockwise: bool = True) -> int:
     return -deg if clockwise else deg
 
 
-def crop_white_border(img: Image.Image) -> Image.Image:
+def crop_white_border(img: Image.Image, threshold: int = 245, padding: int = 6) -> Image.Image:
+    """Auto-crop white borders with a small padding."""
     gray = img.convert("L")
-    x0, y0, x1, y1 = 0, 0, gray.width, gray.height
-    found = False
-    for y in range(gray.height):
-        if any(gray.getpixel((x, y)) < 240 for x in range(gray.width)):
-            y0 = y
-            found = True
-            break
-    found = False
-    for y in range(gray.height - 1, -1, -1):
-        if any(gray.getpixel((x, y)) < 240 for x in range(gray.width)):
-            y1 = y + 1
-            found = True
-            break
-    found = False
-    for x in range(gray.width):
-        if any(gray.getpixel((x, y)) < 240 for y in range(gray.height)):
-            x0 = x
-            found = True
-            break
-    found = False
-    for x in range(gray.width - 1, -1, -1):
-        if any(gray.getpixel((x, y)) < 240 for y in range(gray.height)):
-            x1 = x + 1
-            found = True
-            break
-    return img.crop((x0, y0, x1, y1))
+    w, h = gray.size
+    pix = gray.load()
+
+    xs = []
+    ys = []
+    for y in range(h):
+        for x in range(w):
+            if pix[x, y] < threshold:
+                xs.append(x)
+                ys.append(y)
+
+    if not xs:
+        return img
+
+    left = max(0, min(xs) - padding)
+    right = min(w, max(xs) + padding + 1)
+    top = max(0, min(ys) - padding)
+    bottom = min(h, max(ys) + padding + 1)
+
+    return img.crop((left, top, right, bottom))
 
 
 def load_source_image(image_path: Path | None = None) -> Image.Image:
+    """Load and composite onto white background, then crop white borders."""
     path = image_path or SOURCE_IMAGE
-    img = Image.open(path)
-    if img.mode == "RGBA":
-        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        bg.paste(img, mask=img.split()[3])
-        img = bg
+    img = Image.open(path).convert("RGBA")
+    white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    img = Image.alpha_composite(white_bg, img).convert("RGB")
     img = crop_white_border(img)
-    return img.convert("L")
-
-
-def _resize_to_fit(
-    img_gray: Image.Image,
-    lines: int = LINES,
-    max_width: int | None = None,
-) -> Image.Image:
-    """Resize image to exactly `lines` text rows high, width capped by max_width."""
-    src_w, src_h = img_gray.size
-    aspect = src_w / src_h
-    target_h = lines * 2
-    target_w = max(4, int(target_h * aspect))
-    if max_width is not None and target_w > max_width:
-        target_w = max_width
-        target_h = max(4, int(target_w / aspect))
-        if target_h > lines * 2:
-            target_h = lines * 2
-    return img_gray.resize((target_w, target_h), Image.LANCZOS)
+    return img
 
 
 def make_clean_ring_frame(
-    img_gray: Image.Image,
-    lines: int = LINES,
-    max_width: int | None = None,
+    src_gray: Image.Image,
+    angle: float,
 ) -> Image.Image:
-    """Resize image to fit exactly `lines` rows, capped by max_width chars."""
-    return _resize_to_fit(img_gray, lines=lines, max_width=max_width)
+    """Generate one frame: fixed outer ring + rotated inner content.
+
+    The outer ring is drawn fresh every frame (always circular, never rotated).
+    Only the center content (within preserve_r) is rotated.
+    """
+    w, h = src_gray.size
+    cx = w / 2.0
+    cy = h / 2.0
+    radius = min(w, h) / 2.0 - 4
+
+    preserve_r = 0.67 * radius
+    ring_inner = 0.74 * radius
+    ring_outer = 0.97 * radius
+
+    frame = Image.new("L", (w, h), 255)
+    draw = ImageDraw.Draw(frame)
+
+    draw.ellipse(
+        (cx - ring_outer, cy - ring_outer, cx + ring_outer, cy + ring_outer),
+        fill=0,
+    )
+    draw.ellipse(
+        (cx - ring_inner, cy - ring_inner, cx + ring_inner, cy + ring_inner),
+        fill=255,
+    )
+
+    rotated = src_gray.rotate(
+        angle,
+        resample=Image.BICUBIC,
+        center=(cx, cy),
+        fillcolor=255,
+    )
+
+    frame_pix = frame.load()
+    rot_pix = rotated.load()
+
+    for y in range(h):
+        for x in range(w):
+            rr = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+            if rr <= preserve_r:
+                frame_pix[x, y] = rot_pix[x, y]
+
+    return frame
 
 
 def render_outline_fill(
-    img_gray: Image.Image,
+    mask_img: Image.Image,
     lines: int = LINES,
     max_width: int | None = None,
 ) -> list[str]:
-    """Render gray image to ASCII lines. Returns list of strings, each exactly `lines` rows."""
-    img = _resize_to_fit(img_gray, lines=lines, max_width=max_width)
-    w, h = img.size
+    """Render outline_fill style ASCII art from a grayscale image.
 
-    grid = [[(255, False)] * w for _ in range(h)]
-    for y in range(h):
-        for x in range(w):
-            g = img.getpixel((x, y))
-            grid[y][x] = (g, g < 240)
+    Uses block characters (█▓▒░) for fill and directional characters (│─╱╲)
+    for outlines based on Sobel gradient direction.
+    Returns exactly `lines` rows.
+    """
+    src_w, src_h = mask_img.size
+    target_h = lines
+    target_w = max(1, int((src_w / src_h) * target_h / 0.5))
 
-    ascii_lines: list[str] = []
-    for y in range(h):
+    if max_width is not None and target_w > max_width:
+        target_w = max_width
+
+    gray = mask_img.resize((target_w, target_h), Image.LANCZOS)
+    pix = gray.load()
+
+    values = [
+        [(255 - pix[x, y]) / 255.0 for x in range(target_w)]
+        for y in range(target_h)
+    ]
+
+    def val(x: int, y: int) -> float:
+        if 0 <= x < target_w and 0 <= y < target_h:
+            return values[y][x]
+        return 0.0
+
+    result: list[str] = []
+
+    for y in range(target_h):
         row: list[str] = []
-        for x in range(w):
-            g, is_filled = grid[y][x]
-            if not is_filled:
+        for x in range(target_w):
+            c = values[y][x]
+
+            if c < 0.10:
                 row.append(" ")
                 continue
-            is_edge = False
-            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                ny, nx = y + dy, x + dx
-                if ny < 0 or ny >= h or nx < 0 or nx >= w:
-                    is_edge = True
-                    break
-                if not grid[ny][nx][1]:
-                    is_edge = True
-                    break
-            if is_edge:
-                idx = min(int((255 - g) / 256 * len(OUTLINE_CHARS)), len(OUTLINE_CHARS) - 1)
-                row.append(OUTLINE_CHARS[idx])
+
+            gx = val(x + 1, y) - val(x - 1, y)
+            gy = val(x, y + 1) - val(x, y - 1)
+            edge = abs(gx) + abs(gy)
+
+            if c > 0.72:
+                row.append("█")
+            elif c > 0.52:
+                row.append("▓")
+            elif c > 0.32:
+                if edge > 0.20:
+                    if abs(gx) > abs(gy) * 1.3:
+                        row.append("│")
+                    elif abs(gy) > abs(gx) * 1.3:
+                        row.append("─")
+                    else:
+                        row.append("╱" if gx * gy < 0 else "╲")
+                else:
+                    row.append("▒")
             else:
-                idx = min(int((255 - g) / 256 * len(FILL_CHARS)), len(FILL_CHARS) - 1)
-                row.append(FILL_CHARS[idx])
-        ascii_lines.append("".join(row).rstrip())
-    return ascii_lines
+                if edge > 0.18:
+                    if abs(gx) > abs(gy) * 1.3:
+                        row.append("│")
+                    elif abs(gy) > abs(gx) * 1.3:
+                        row.append("─")
+                    else:
+                        row.append("╱" if gx * gy < 0 else "╲")
+                else:
+                    row.append("░")
+
+        result.append("".join(row).rstrip())
+
+    return result
 
 
 def colorize_blue_white_gradient(
@@ -169,10 +216,10 @@ def colorize_blue_white_gradient(
     width: int | None = None,
     height: int | None = None,
 ) -> Text:
-    """Apply blue-white gradient using fixed screen-coordinate bounds.
+    """Apply blue-white gradient using FIXED screen-coordinate bounds.
 
-    The gradient is computed from fixed (width, height) so it never
-    shifts between frames — no "clock hand" sweep effect.
+    Gradient direction: top-left white → bottom-right blue.
+    t = 0.55 * nx + 0.45 * ny (fixed diagonal, never shifts per-frame).
     """
     h = height or len(ascii_lines)
     w = width or max((len(line) for line in ascii_lines), default=1)
@@ -186,7 +233,7 @@ def colorize_blue_white_gradient(
                 continue
             nx = x / max(1, w - 1)
             ny = y / max(1, h - 1)
-            t = 0.15 + 0.35 * (0.55 * nx + 0.45 * ny)
+            t = 0.55 * nx + 0.45 * ny
             r = int(WHITE[0] + (CAS_BLUE[0] - WHITE[0]) * t)
             g = int(WHITE[1] + (CAS_BLUE[1] - WHITE[1]) * t)
             b = int(WHITE[2] + (CAS_BLUE[2] - WHITE[2]) * t)
@@ -206,8 +253,11 @@ def build_frames(
 ) -> list[Text]:
     """Build all rotation frames of the logo as Rich Text objects.
 
-    Each frame rotates the SOURCE IMAGE via PIL, then renders to ASCII,
-    then applies a FIXED-BOUNDS gradient. No color sweep.
+    Each frame:
+    1. Rotates inner content via PIL (clockwise when CLOCKWISE=True).
+    2. Draws fixed outer ring.
+    3. Renders to ASCII with outline_fill characters.
+    4. Applies FIXED-BOUNDS gradient (no clock-hand sweep).
     Result: exactly `lines` rows per frame.
     """
     if not HAS_PIL:
@@ -218,17 +268,16 @@ def build_frames(
         return [_fallback_frame()]
 
     try:
-        src_gray = load_source_image(path)
+        img = load_source_image(path)
+        src_gray = img.convert("L")
     except Exception:
         return [_fallback_frame()]
 
     frames: list[Text] = []
     for deg in range(0, 360, frame_step):
         angle = real_rotation_angle(deg, clockwise)
-        rotated = src_gray.rotate(angle, resample=Image.BICUBIC, expand=True)
-        rotated = crop_white_border(rotated)
-
-        ascii_lines = render_outline_fill(rotated, lines=lines, max_width=max_width)
+        frame_img = make_clean_ring_frame(src_gray, angle)
+        ascii_lines = render_outline_fill(frame_img, lines=lines, max_width=max_width)
 
         while len(ascii_lines) < lines:
             ascii_lines.append("")
