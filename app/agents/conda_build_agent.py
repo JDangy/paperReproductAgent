@@ -320,6 +320,7 @@ class CondaBuildAgent:
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
         last_emit = 0.0
+        last_visible: tuple[str, ...] = ()
         pending: list[str] = []
 
         try:
@@ -344,11 +345,14 @@ class CondaBuildAgent:
                     if clean:
                         pending.append(clean)
 
-                if pending and now - last_emit >= 0.5:
+                visible = tuple(pending[-5:])
+                if visible and visible != last_visible and now - last_emit >= 1.0:
+                    last_visible = visible
                     last_emit = now
                     emit_progress("Build conda env", step_name,
-                                  detail="\n".join(pending[-5:]),
-                                  log_lines=pending[-5:])
+                                  detail=None,
+                                  log_lines=list(visible),
+                                  cli_stream=True)
                     pending.clear()
 
                 if proc.poll() is not None:
@@ -372,8 +376,9 @@ class CondaBuildAgent:
 
             if pending:
                 emit_progress("Build conda env", step_name,
-                              detail="\n".join(pending[-5:]),
-                              log_lines=pending[-5:])
+                              detail=None,
+                              log_lines=pending[-5:],
+                              cli_stream=True)
 
             stdout = "".join(stdout_parts)
             stderr = "".join(stderr_parts)
@@ -424,9 +429,20 @@ def _enqueue(pipe, q: Queue[tuple[str, str]], stream_name: str) -> None:
 
 
 def _clean_cli(line: str) -> str:
-    """Handle carriage-return overwrites and strip whitespace."""
-    line = line.replace("\r", "\n").splitlines()[-1] if line else ""
+    """Handle carriage-return overwrites, strip ANSI/control chars."""
+    if not line:
+        return ""
+    line = line.replace("\r", "\n").splitlines()[-1] if "\r" in line else line
+    # Strip ANSI escape and OSC sequences
+    line = _ANSI_RE.sub("", line)
+    line = _OSC_RE.sub("", line)
+    line = _CONTROL_RE.sub("", line)
     return line.strip()
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_OSC_RE = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _repo_needs_audio_runtime_helper(repo_dir: Path) -> bool:

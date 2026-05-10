@@ -148,8 +148,11 @@ def _clone_subprocess(url: str, dest_dir: Path, *, env: dict | None = None, time
                                 last_pct = pct
                             bar = make_progress_bar(pct)
                             emit_progress("Evaluate repo", "正在克隆仓库",
-                                          detail=f"{bar} {clean}".strip(),
-                                          clone_progress=clean)
+                                          detail=None,
+                                          progress_kind="git_clone",
+                                          progress_percent=pct,
+                                          progress_bar=bar,
+                                          progress_text=clean)
 
             if proc.poll() is not None:
                 break
@@ -281,8 +284,11 @@ def _download_repo_zip(url: str, dest_dir: Path) -> Path:
                                 last_pct = pct
                                 bar = make_progress_bar(pct)
                                 emit_progress("Evaluate repo", "正在下载仓库 ZIP",
-                                              detail=f"{bar} {downloaded / 1024 / 1024:.1f} MiB",
-                                              clone_progress=f"zip {pct}%")
+                                              detail=None,
+                                              progress_kind="zip_download",
+                                              progress_percent=pct,
+                                              progress_bar=bar,
+                                              progress_text=f"已下载 {downloaded / 1024 / 1024:.1f} MiB")
 
             emit_progress("Evaluate repo", "仓库 ZIP 下载完成，正在解压")
             with zipfile.ZipFile(zip_path) as zf:

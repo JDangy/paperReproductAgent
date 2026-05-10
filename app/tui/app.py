@@ -200,6 +200,7 @@ class PaperAgentApp(App):
         self._current_stage_message: str | None = None
         self._last_progress_at: float | None = None
         self._last_live_log_sig: tuple | None = None
+        self._last_chrome_update_at: float = 0.0
         self._heartbeat_timer: object | None = None
 
     # ── Compose ──────────────────────────────────────────────
@@ -550,11 +551,15 @@ class PaperAgentApp(App):
                 duration=duration,
             )
 
-        # Update status bar
-        if self._status_bar:
-            self._status_bar.update_info(status=status)
-        if self._header:
-            self._header.update_summary(status=status)
+        # Update status bar / header (throttled for high-frequency cli_stream events)
+        is_cli_stream = bool(ev.data.get("cli_stream"))
+        should_update_chrome = not is_cli_stream or (now - self._last_chrome_update_at >= 2.0)
+        if should_update_chrome:
+            self._last_chrome_update_at = now
+            if self._status_bar:
+                self._status_bar.update_info(status=status)
+            if self._header:
+                self._header.update_summary(status=status)
 
         if ev.phase in ("finish", "fail"):
             self._sync_artifact_panel()
