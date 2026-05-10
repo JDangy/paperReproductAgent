@@ -43,6 +43,11 @@ def _looks_like_arxiv(value: str) -> bool:
     )
 
 
+def _make_splash(on_done):
+    from .widgets.boot_splash import BootSplash
+    return BootSplash(on_done=on_done)
+
+
 def _cleanup_killed_task_files(task_dir: str | None) -> None:
     if not task_dir:
         return
@@ -156,9 +161,11 @@ class PaperAgentApp(App):
         timeout_minutes: int,
         max_repair_attempts: int,
         resolver: InputResolverAgent | None = None,
+        skip_splash: bool = False,
         **kwargs: object,
     ) -> None:
         super().__init__(**kwargs)
+        self._skip_splash = skip_splash
         self.runner = runner
         self.resolver = resolver or InputResolverAgent()
         self.session = Session(
@@ -225,6 +232,15 @@ class PaperAgentApp(App):
         yield Static("", id="bottom-spacer-2")
 
     def on_mount(self) -> None:
+        if not self._skip_splash:
+            self.push_screen(_make_splash(self._on_splash_done))
+            return
+        self._on_mount_ready()
+
+    def _on_splash_done(self, _results=None) -> None:
+        self._on_mount_ready()
+
+    def _on_mount_ready(self) -> None:
         self._header = self.query_one(HeaderLogo)
         self._timeline = self.query_one(MessageTimeline)
         self._status_bar = self.query_one(StatusBar)
