@@ -615,8 +615,10 @@ class PaperAgentApp(App):
         duration: float | None,
         now: float,
     ) -> None:
+        # Full chrome update every 5 seconds
         last = getattr(self, "_last_cli_chrome_update_at", 0.0)
         if now - last < 5.0:
+            self._throttled_screen_refresh(now)
             return
         self._last_cli_chrome_update_at = now
         if self._pipeline_panel:
@@ -631,8 +633,15 @@ class PaperAgentApp(App):
             self._status_bar.update_info(status=status)
         if self._header:
             self._header.update_summary(status=status)
-        # Force full screen repaint to prevent Windows Terminal
-        # from showing black areas during long-running cli_stream stages
+        self.screen.refresh()
+
+    def _throttled_screen_refresh(self, now: float) -> None:
+        """Force full screen repaint at 1 Hz to prevent Windows Terminal
+        from showing black/unrendered areas during high-frequency progress."""
+        last = getattr(self, "_last_screen_refresh_at", 0.0)
+        if now - last < 1.0:
+            return
+        self._last_screen_refresh_at = now
         self.screen.refresh()
 
     def _build_progress_log_lines(self, ev: ProgressEvent) -> list[str]:
