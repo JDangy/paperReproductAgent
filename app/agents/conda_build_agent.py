@@ -114,6 +114,7 @@ class CondaBuildAgent:
                     )
 
             for requirements_path in find_requirement_files(repo_dir):
+                display_req = _safe_display_path(requirements_path, repo_dir=repo_dir, task_dir=task_dir)
                 # Filter torch family if runtime_decision exists
                 if state.runtime_decision:
                     original = requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -123,6 +124,7 @@ class CondaBuildAgent:
                         filtered_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
                         log_parts.append(f"Filtered torch family from {requirements_path.name} per runtime decision")
                         requirements_path = filtered_path
+                        display_req = _safe_display_path(requirements_path, repo_dir=repo_dir, task_dir=task_dir)
                 self._install_requirements_with_relax_retry(
                     pip_cmd=pip_cmd,
                     requirements_path=requirements_path,
@@ -130,7 +132,7 @@ class CondaBuildAgent:
                     env_dir=env_dir,
                     deadline=deadline,
                     log_parts=log_parts,
-                    step_name=f"install {requirements_path.relative_to(repo_dir).as_posix()}",
+                    step_name=f"install {display_req}",
                 )
 
             env_requirements = extract_pip_requirements_from_environment_file(repo_dir)
@@ -476,3 +478,22 @@ def _write_marker(env_dir: Path, state: TaskState, slug: str, python_bin: Path) 
         )
     except Exception:
         pass  # non-critical
+
+
+def _safe_display_path(path: Path, *, repo_dir: Path, task_dir: Path | None = None) -> str:
+    """Display a path relative to repo_dir, task_dir, or just the filename."""
+    path = Path(path).resolve()
+    repo_dir = Path(repo_dir).resolve()
+
+    try:
+        return path.relative_to(repo_dir).as_posix()
+    except ValueError:
+        pass
+
+    if task_dir is not None:
+        try:
+            return path.relative_to(Path(task_dir).resolve()).as_posix()
+        except ValueError:
+            pass
+
+    return path.name
