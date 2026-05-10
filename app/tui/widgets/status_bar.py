@@ -10,14 +10,24 @@ from .. import theme as T
 
 def _status_short_cn(status: str) -> str:
     mapping = {
-        "draft": "草稿", "running": "运行中", "success": "成功",
-        "failed": "失败", "cancelled": "已取消", "completed": "已完成",
+        "draft": "草稿",
+        "running": "运行中",
+        "success": "成功",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "completed": "已完成",
     }
     return mapping.get(status.lower(), status)
 
 
 def _panel_cn(panel: str) -> str:
-    mapping = {"pipeline": "流水线", "help": "帮助", "artifacts": "产物", "session": "会话", "none": "无"}
+    mapping = {
+        "pipeline": "流水线",
+        "help": "帮助",
+        "artifacts": "产物",
+        "session": "会话",
+        "none": "无",
+    }
     return mapping.get(panel, panel)
 
 
@@ -29,7 +39,7 @@ class StatusBar(Widget):
         height: 1;
         min-height: 1;
         width: 100%;
-        background: $surface;
+        background: #000000;
         color: $text-muted;
         padding: 0 1;
         border-top: solid $primary-darken-2;
@@ -90,7 +100,9 @@ class StatusBar(Widget):
         if self._paper and self._paper != "-":
             parts.append(f"[{T.FG_DIM}]│ {self._paper[:12]}[/]")
         if self._last_error:
-            parts.append(f"[{T.FG_DIM}]│[/] [{T.ERROR_BORDER}]{self._last_error[:20]}[/]")
+            parts.append(
+                f"[{T.FG_DIM}]│[/] [{T.ERROR_BORDER}]{self._last_error[:20]}[/]"
+            )
 
         parts.append(f"[{T.FG_DIM}] │ Ctrl+P 切换模式 │ Ctrl+L 清屏 │ Ctrl+C 退出[/]")
         text = "".join(parts)

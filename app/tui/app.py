@@ -107,7 +107,7 @@ class PaperAgentApp(App):
     CSS = """
     Screen {
         layout: vertical;
-        background: $surface;
+        background: #000000;
     }
     #main-content {
         height: 1fr;
@@ -140,7 +140,7 @@ class PaperAgentApp(App):
     #bottom-spacer-2 {
         height: 1;
         min-height: 1;
-        background: $surface;
+        background: #000000;
     }
     """
 

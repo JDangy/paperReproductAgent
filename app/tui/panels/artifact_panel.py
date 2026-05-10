@@ -19,7 +19,7 @@ class ArtifactPanel(Widget):
     ArtifactPanel {
         width: 34;
         height: 1fr;
-        background: $surface;
+        background: #000000;
         border-left: solid $primary-darken-2;
         padding: 0 1;
     }
@@ -85,7 +85,9 @@ class ArtifactPanel(Widget):
                 if path:
                     exists = "✓" if Path(path).exists() else "✗"
                     ec = T.GREEN if exists == "✓" else T.RED
-                    lines.append(f"[{ec}]{exists}[/] [{T.FG_DIM}]{label}:[/] [{T.FG}]{_trunc(path, 42)}[/]")
+                    lines.append(
+                        f"[{ec}]{exists}[/] [{T.FG_DIM}]{label}:[/] [{T.FG}]{_trunc(path, 42)}[/]"
+                    )
                 else:
                     lines.append(f"[{T.FG_DIM}]– {label}[/]")
             content = "\n".join(lines)
@@ -106,4 +108,4 @@ class ArtifactPanel(Widget):
 def _trunc(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
-    return text[:max_len // 2 - 1] + "…" + text[-(max_len // 2 - 1):]
+    return text[: max_len // 2 - 1] + "…" + text[-(max_len // 2 - 1) :]

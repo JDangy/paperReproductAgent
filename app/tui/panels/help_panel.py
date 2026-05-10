@@ -58,7 +58,7 @@ class HelpPanel(Widget):
     HelpPanel {
         width: 34;
         height: 1fr;
-        background: $surface;
+        background: #000000;
         border-left: solid $primary-darken-2;
         padding: 0 1;
     }

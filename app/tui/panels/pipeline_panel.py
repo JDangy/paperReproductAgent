@@ -57,8 +57,11 @@ _BUILD_STAGES = {"Build conda env", "Build virtualenv", "Build Docker image"}
 @dataclass
 class StageView:
     """Lightweight view-model for a pipeline stage."""
+
     name: str
-    status: Literal["queued", "running", "success", "failed", "skipped", "disabled"] = "queued"
+    status: Literal["queued", "running", "success", "failed", "skipped", "disabled"] = (
+        "queued"
+    )
     message: str = ""
     detail: str = ""
     duration: float | None = None
@@ -88,7 +91,7 @@ class PipelinePanel(Widget):
     PipelinePanel {
         width: 34;
         height: 1fr;
-        background: $surface;
+        background: #000000;
         border-left: solid $primary-darken-2;
         padding: 0 1;
     }
@@ -129,7 +132,9 @@ class PipelinePanel(Widget):
             }
             return backend_map.get(stage) == self._backend
         if self._backend == "none" and stage in (
-            "Run smoke command", "Run benchmark reproduction", "Run simple reproduction",
+            "Run smoke command",
+            "Run benchmark reproduction",
+            "Run simple reproduction",
         ):
             return False
         return True
@@ -137,7 +142,10 @@ class PipelinePanel(Widget):
     def update_stage(self, stage: StageView) -> None:
         if stage.name in self._stages:
             existing = self._stages[stage.name]
-            if existing.status in ("failed", "success", "skipped") and stage.status == "running":
+            if (
+                existing.status in ("failed", "success", "skipped")
+                and stage.status == "running"
+            ):
                 stage.attempts = existing.attempts + 1
         self._stages[stage.name] = stage
         self._refresh()
@@ -150,10 +158,15 @@ class PipelinePanel(Widget):
         detail: str = "",
         duration: float | None = None,
     ) -> None:
-        self.update_stage(StageView(
-            name=name, status=status,  # type: ignore[arg-type]
-            message=message, detail=detail, duration=duration,
-        ))
+        self.update_stage(
+            StageView(
+                name=name,
+                status=status,  # type: ignore[arg-type]
+                message=message,
+                detail=detail,
+                duration=duration,
+            )
+        )
 
     def _refresh(self) -> None:
         lines: list[str] = []

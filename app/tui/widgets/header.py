@@ -14,8 +14,12 @@ import time
 
 def _status_cn_short(status: str) -> str:
     mapping = {
-        "draft": "草稿", "running": "运行中", "success": "成功",
-        "failed": "失败", "cancelled": "已取消", "completed": "已完成",
+        "draft": "草稿",
+        "running": "运行中",
+        "success": "成功",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "completed": "已完成",
     }
     return mapping.get(status.lower(), status)
 
@@ -38,7 +42,7 @@ class HeaderLogo(Widget):
         height: auto;
         max-height: 8;
         padding: 0 1;
-        background: $surface;
+        background: #000000;
         border-bottom: solid $primary-darken-2;
     }
     HeaderLogo #logo-area {

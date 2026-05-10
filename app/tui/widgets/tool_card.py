@@ -14,22 +14,37 @@ from ..display_utils import clean_display_text
 # ── Labels ────────────────────────────────────────────────
 
 _STAGE_CN: dict[str, str] = {
-    "Ingest paper": "解析论文", "Understand paper": "理解论文",
-    "Search GitHub": "搜索 GitHub", "Evaluate repo": "评估仓库",
-    "Build conda env": "构建 conda 环境", "Build virtualenv": "构建虚拟环境",
-    "Build Docker image": "构建 Docker 镜像", "Run smoke command": "运行冒烟测试",
-    "Run benchmark reproduction": "运行 benchmark 复现", "Run simple reproduction": "运行轻量复现",
+    "Ingest paper": "解析论文",
+    "Understand paper": "理解论文",
+    "Search GitHub": "搜索 GitHub",
+    "Evaluate repo": "评估仓库",
+    "Build conda env": "构建 conda 环境",
+    "Build virtualenv": "构建虚拟环境",
+    "Build Docker image": "构建 Docker 镜像",
+    "Run smoke command": "运行冒烟测试",
+    "Run benchmark reproduction": "运行 benchmark 复现",
+    "Run simple reproduction": "运行轻量复现",
     "Write report": "生成报告",
 }
 
 _STATUS_CN: dict[str, str] = {
-    "queued": "等待", "running": "运行中", "success": "完成",
-    "failed": "失败", "skipped": "跳过", "cancelled": "取消", "disabled": "禁用",
+    "queued": "等待",
+    "running": "运行中",
+    "success": "完成",
+    "failed": "失败",
+    "skipped": "跳过",
+    "cancelled": "取消",
+    "disabled": "禁用",
 }
 
 _ICON_MAP: dict[str, str] = {
-    "queued": "○", "running": "●", "success": "✓",
-    "failed": "✗", "skipped": "–", "cancelled": "–", "disabled": "–",
+    "queued": "○",
+    "running": "●",
+    "success": "✓",
+    "failed": "✗",
+    "skipped": "–",
+    "cancelled": "–",
+    "disabled": "–",
 }
 
 
@@ -43,9 +58,9 @@ class ToolCard(Widget):
         margin: 0 0 1 0;
         padding: 0 1;
         height: auto;
-        background: #181825;
+        background: #000000;
         border-left: thick #585b70;
-        border-bottom: solid #313244;
+        border-bottom: solid #000000;
     }
     ToolCard.running {
         border-left: thick #8be9fd;
@@ -111,22 +126,26 @@ class ToolCard(Widget):
     # ── Properties ──────────────────────────────────────────
 
     @property
-    def status(self) -> str: return self._status
+    def status(self) -> str:
+        return self._status
 
     @property
-    def stage_label(self) -> str: return _STAGE_CN.get(self.tool_name, self.tool_name)
+    def stage_label(self) -> str:
+        return _STAGE_CN.get(self.tool_name, self.tool_name)
 
     @property
-    def status_label(self) -> str: return _STATUS_CN.get(self._status, self._status)
+    def status_label(self) -> str:
+        return _STATUS_CN.get(self._status, self._status)
 
     @property
-    def icon(self) -> str: return _ICON_MAP.get(self._status, "●")
+    def icon(self) -> str:
+        return _ICON_MAP.get(self._status, "●")
 
     def latest_log(self) -> str:
         return self._log_lines[-1] if self._log_lines else self._message or ""
 
     def get_visible_logs(self) -> list[str]:
-        return self._log_lines[-self._max_expanded:]
+        return self._log_lines[-self._max_expanded :]
 
     # ── Log buffer ──────────────────────────────────────────
 
@@ -232,11 +251,30 @@ class ToolCard(Widget):
         self._refresh_display()
 
     def _sync_status_class(self) -> None:
-        for cls in ("queued", "running", "success", "failed", "skipped", "cancelled", "disabled"):
+        for cls in (
+            "queued",
+            "running",
+            "success",
+            "failed",
+            "skipped",
+            "cancelled",
+            "disabled",
+        ):
             self.remove_class(cls)
-        self.add_class(self._status if self._status in {
-            "queued", "running", "success", "failed", "skipped", "cancelled", "disabled"
-        } else "running")
+        self.add_class(
+            self._status
+            if self._status
+            in {
+                "queued",
+                "running",
+                "success",
+                "failed",
+                "skipped",
+                "cancelled",
+                "disabled",
+            }
+            else "running"
+        )
 
     # ── Display ─────────────────────────────────────────────
 
@@ -275,11 +313,16 @@ class ToolCard(Widget):
             else:
                 visible = self.get_visible_logs()
                 if visible:
-                    body.update("\n".join(
-                        f"  {l}" if len(l) <= self._MAX_BODY_LINE
-                        else f"  {l[:self._MAX_BODY_LINE - 3]}..."
-                        for l in visible
-                    ))
+                    body.update(
+                        "\n".join(
+                            (
+                                f"  {l}"
+                                if len(l) <= self._MAX_BODY_LINE
+                                else f"  {l[:self._MAX_BODY_LINE - 3]}..."
+                            )
+                            for l in visible
+                        )
+                    )
                     body.display = True
                 else:
                     body.display = False

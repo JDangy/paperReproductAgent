@@ -18,7 +18,7 @@ class Composer(Widget):
         height: 7;
         min-height: 7;
         padding: 1 1 2 1;
-        background: $surface;
+        background: #000000;
         border-top: solid $primary-darken-2;
     }
     Composer.has-completion {
@@ -150,7 +150,9 @@ class Composer(Widget):
 
         popup.add_class("visible")
         n = len(self._completion_items)
-        self._completion_scroll = _ensure_visible(self._completion_index, self._completion_scroll, n, self._visible_count)
+        self._completion_scroll = _ensure_visible(
+            self._completion_index, self._completion_scroll, n, self._visible_count
+        )
 
         start = self._completion_scroll
         end = min(n, start + self._visible_count)
@@ -159,9 +161,15 @@ class Composer(Widget):
             item = self._completion_items[i]
             prefix = ">" if i == self._completion_index else " "
             color = T.GREEN if i == self._completion_index else T.FG_DIM
-            arg_part = f" {item.display_args or item.args}" if (item.display_args or item.args) else ""
+            arg_part = (
+                f" {item.display_args or item.args}"
+                if (item.display_args or item.args)
+                else ""
+            )
             desc = item.description[:50]
-            lines.append(f"[{color}]{prefix} /{item.command}{arg_part:<20}[/] [{T.FG_DIM}]{desc}[/]")
+            lines.append(
+                f"[{color}]{prefix} /{item.command}{arg_part:<20}[/] [{T.FG_DIM}]{desc}[/]"
+            )
         if n > self._visible_count:
             lines.append(f"[dim]{start + 1}-{end} / {n}[/]")
         popup.update("\n".join(lines))
@@ -179,7 +187,9 @@ class Composer(Widget):
     def has_completion(self) -> bool:
         return self._completion_visible and len(self._completion_items) > 0
 
-    def _accept_completion(self, submit_if_complete: bool = False) -> tuple[bool, str | None]:
+    def _accept_completion(
+        self, submit_if_complete: bool = False
+    ) -> tuple[bool, str | None]:
         """Accept current completion.
 
         Returns (accepted, submit_text).

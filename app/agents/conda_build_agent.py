@@ -72,7 +72,8 @@ class CondaBuildAgent:
                 raise BuildStepError("locate conda", 127)
 
             if python_bin.exists():
-                result.build_success = True
+                # Reuse existing env — skip conda create, pip upgrade,
+                # and torch install, but still install repo deps below.
                 result.install_actions.append(
                     {
                         "action": "reuse_conda_env",
@@ -89,57 +90,61 @@ class CondaBuildAgent:
                     level="success",
                     detail=str(conda_env_dir),
                 )
-                _write_marker(conda_env_dir, state, paper_slug, python_bin)
-                build_log_path.write_text("\n".join(log_parts), encoding="utf-8")
-                state.env_build = result
-                save_json(env_dir / "environment_summary.json", result)
-                state.status = "env_built"
-                return state
+            else:
+                if conda_env_dir.exists():
+                    shutil.rmtree(conda_env_dir)
+                conda_env_dir.parent.mkdir(parents=True, exist_ok=True)
 
-            if conda_env_dir.exists():
-                shutil.rmtree(conda_env_dir)
-            conda_env_dir.parent.mkdir(parents=True, exist_ok=True)
+                python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+                self._run_step(
+                    [
+                        conda,
+                        "create",
+                        "-y",
+                        "-p",
+                        str(conda_env_dir),
+                        f"python={python_version}",
+                        "pip",
+                    ],
+                    cwd=repo_dir,
+                    deadline=deadline,
+                    log_parts=log_parts,
+                    step_name=f"create conda env python={python_version}",
+                )
+                _bridge_preferred_runtime(conda_env_dir, log_parts, result)
 
-            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            self._run_step(
-                [
-                    conda,
-                    "create",
-                    "-y",
-                    "-p",
-                    str(conda_env_dir),
-                    f"python={python_version}",
-                    "pip",
-                ],
-                cwd=repo_dir,
-                deadline=deadline,
-                log_parts=log_parts,
-                step_name=f"create conda env python={python_version}",
-            )
-            _bridge_preferred_runtime(conda_env_dir, log_parts, result)
+                pip_cmd = [str(python_bin), "-m", "pip"]
+                self._run_step(
+                    [
+                        *pip_cmd,
+                        "install",
+                        "--upgrade",
+                        "pip",
+                        "setuptools",
+                        "wheel",
+                    ],
+                    cwd=repo_dir,
+                    deadline=deadline,
+                    log_parts=log_parts,
+                    step_name="upgrade pip tooling",
+                )
 
+                # Install PyTorch per runtime decision
+                if state.runtime_decision and state.runtime_decision.install_plan:
+                    for i, plan_cmd in enumerate(state.runtime_decision.install_plan):
+                        resolved = [
+                            str(python_bin) if p == "python" else p for p in plan_cmd
+                        ]
+                        self._run_step(
+                            resolved,
+                            cwd=repo_dir,
+                            deadline=deadline,
+                            log_parts=log_parts,
+                            step_name=f"install pytorch runtime ({i + 1}/{len(state.runtime_decision.install_plan)})",
+                        )
+
+            # ── Common: repo deps + editable install (always run) ──
             pip_cmd = [str(python_bin), "-m", "pip"]
-            self._run_step(
-                [*pip_cmd, "install", "--upgrade", "pip", "setuptools", "wheel"],
-                cwd=repo_dir,
-                deadline=deadline,
-                log_parts=log_parts,
-                step_name="upgrade pip tooling",
-            )
-
-            # Install PyTorch per runtime decision
-            if state.runtime_decision and state.runtime_decision.install_plan:
-                for i, plan_cmd in enumerate(state.runtime_decision.install_plan):
-                    resolved = [
-                        str(python_bin) if p == "python" else p for p in plan_cmd
-                    ]
-                    self._run_step(
-                        resolved,
-                        cwd=repo_dir,
-                        deadline=deadline,
-                        log_parts=log_parts,
-                        step_name=f"install pytorch runtime ({i + 1}/{len(state.runtime_decision.install_plan)})",
-                    )
 
             for requirements_path in find_requirement_files(repo_dir):
                 display_req = _safe_display_path(
@@ -196,7 +201,13 @@ class CondaBuildAgent:
                 # import torch at module level in setup.py, which fails in
                 # pip's temporary isolated build environment.
                 self._run_step(
-                    [*pip_cmd, "install", "-e", ".", "--no-build-isolation"],
+                    [
+                        *pip_cmd,
+                        "install",
+                        "-e",
+                        ".",
+                        "--no-build-isolation",
+                    ],
                     cwd=repo_dir,
                     deadline=deadline,
                     log_parts=log_parts,
@@ -269,7 +280,7 @@ class CondaBuildAgent:
         if pinned_lines != original_lines:
             pinned_path.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
             log_parts.append(
-                f"Pinning versions: {requirements_path.name} → {pinned_path.name}"
+                f"Pinning versions: {requirements_path.name} \u2192 {pinned_path.name}"
             )
             emit_progress(
                 "Build conda env",

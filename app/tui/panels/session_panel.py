@@ -35,7 +35,7 @@ def _status_cn(status: str) -> str:
 def _truncate_path(p: str, max_len: int = 36) -> str:
     if len(p) <= max_len:
         return p
-    return p[:max_len // 2 - 2] + "…" + p[-(max_len // 2 - 2):]
+    return p[: max_len // 2 - 2] + "…" + p[-(max_len // 2 - 2) :]
 
 
 class SessionPanel(Widget):
@@ -45,7 +45,7 @@ class SessionPanel(Widget):
     SessionPanel {
         width: 28;
         height: 1fr;
-        background: $surface;
+        background: #000000;
         border-right: solid $primary-darken-2;
         padding: 0 1;
     }
