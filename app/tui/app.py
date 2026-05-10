@@ -812,22 +812,22 @@ class PaperAgentApp(App):
             self.session.paper_path = str(result.pdf_path.resolve())
             self.session.input_resolved = True
             self.session.status = "draft"
-            self.call_from_thread(self._sync_session_panel)
-            self.call_from_thread(self._update_status)
+            self._sync_session_panel()
+            self._update_status()
             reused = "（复用已有文件）" if result.reused_existing else ""
-            self.call_from_thread(lambda: self._add_assistant(
+            self._add_assistant(
                 f"arXiv PDF 下载完成{reused}。\n\n"
                 f"- arXiv ID：`{result.arxiv_id}`\n"
                 f"- PDF：`{result.pdf_path}`\n\n"
                 "已自动设为当前论文。现在可以执行 `/run`。"
-            ))
+            )
             card = self._get_active_tool_card("Download arXiv PDF")
             if card:
                 card.update(status="success", message="下载 arXiv PDF")
         else:
-            self.call_from_thread(lambda: self._add_error(
+            self._add_error(
                 f"arXiv PDF 下载失败：{result.error or '未知错误'}"
-            ))
+            )
 
     def _upsert_arxiv_progress(self, text: str) -> None:
         stage = "Download arXiv PDF"
