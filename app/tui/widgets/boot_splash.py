@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from .. import theme as T
-from ..logo_loader import load_logo_frames, FPS_INTERVAL, LINES
+from ..logo_loader import load_logo_frames, FPS_INTERVAL, LINES, CAS_BLUE
 from ..preflight import CheckItem, run_preflight
 
 
@@ -129,7 +129,7 @@ class BootSplash(Screen):
             animated[i].status = "running"
             animated[i].message = "正在检查……"
             self._refresh_checks(checks)
-            await asyncio.sleep(0.12)
+            await asyncio.sleep(1.0)
 
             animated[i].status = final_item.status
             animated[i].message = final_item.message
@@ -182,4 +182,10 @@ def _icon_for(status: str) -> str:
 
 
 def _color_for(status: str) -> str:
-    return {"pending": "#666666", "running": "#8be9fd", "pass": T.GREEN, "fail": T.ERROR_BORDER}.get(status, T.FG)
+    CAS_BLUE_HEX = f"#{CAS_BLUE[0]:02x}{CAS_BLUE[1]:02x}{CAS_BLUE[2]:02x}"
+    return {
+        "pending": "#ffffff",
+        "running": "#8be9fd",
+        "pass": CAS_BLUE_HEX,
+        "fail": T.ERROR_BORDER,
+    }.get(status, T.FG)
