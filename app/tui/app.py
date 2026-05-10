@@ -100,6 +100,7 @@ class PaperAgentApp(App):
     CSS = """
     Screen {
         layout: vertical;
+        background: $surface;
     }
     #main-content {
         height: 1fr;
@@ -236,6 +237,7 @@ class PaperAgentApp(App):
     def _on_splash_done(self, results=None) -> None:
         self._preflight_results = results or []
         self._on_mount_ready()
+        self.refresh(layout=True)
 
     def _on_mount_ready(self) -> None:
         self._header = self.query_one(HeaderLogo)
