@@ -9,6 +9,7 @@ from textual.widgets import Static
 
 from ..logo import render_logo, render_compact_logo, SUBTITLE
 from .. import theme as T
+import time
 
 
 def _status_cn_short(status: str) -> str:
@@ -67,6 +68,8 @@ class HeaderLogo(Widget):
         self.backend = backend
         self.mode = mode
         self.status = status
+        self._last_render_width: int | None = None
+        self._last_render_at: float = 0.0
 
     def update_summary(
         self,
@@ -96,6 +99,11 @@ class HeaderLogo(Widget):
     def _render_and_display(self) -> None:
         """Render logo based on available width.  Pass RichText directly to preserve colour spans."""
         width = self.size.width if self.size and self.size.width > 20 else None
+        if width == self._last_render_width:
+            # Only refresh summary; logo already rendered for this width
+            self._refresh_summary()
+            return
+        self._last_render_width = width
         try:
             logo_texts = render_logo(max_width=width)
         except Exception:
@@ -133,4 +141,11 @@ class HeaderLogo(Widget):
             pass
 
     def on_resize(self) -> None:
+        width = self.size.width if self.size and self.size.width > 20 else None
+        if width == self._last_render_width:
+            return
+        now = time.monotonic()
+        if now - self._last_render_at < 0.25:
+            return
+        self._last_render_at = now
         self._render_and_display()

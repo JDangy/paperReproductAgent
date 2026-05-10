@@ -345,7 +345,7 @@ class CondaBuildAgent:
                     if clean:
                         pending.append(clean)
 
-                visible = tuple(pending[-5:])
+                visible = tuple(_clip_for_tui(x) for x in pending[-5:])
                 if visible and visible != last_visible and now - last_emit >= 1.0:
                     last_visible = visible
                     last_emit = now
@@ -433,11 +433,17 @@ def _clean_cli(line: str) -> str:
     if not line:
         return ""
     line = line.replace("\r", "\n").splitlines()[-1] if "\r" in line else line
-    # Strip ANSI escape and OSC sequences
     line = _ANSI_RE.sub("", line)
     line = _OSC_RE.sub("", line)
     line = _CONTROL_RE.sub("", line)
     return line.strip()
+
+
+def _clip_for_tui(line: str, limit: int = 240) -> str:
+    """Clip a log line for TUI display; full content stays in log_parts."""
+    if len(line) <= limit:
+        return line
+    return line[:limit - 3] + "..."
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")

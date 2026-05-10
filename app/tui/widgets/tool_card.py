@@ -248,6 +248,8 @@ class ToolCard(Widget):
             return f"{int(d // 60)}m{d % 60:.0f}s"
         return f"{d:.1f}s"
 
+    _MAX_BODY_LINE = 180
+
     def _refresh_display(self) -> None:
         dur = self._format_duration()
         dur_str = f" {dur}" if dur else ""
@@ -273,7 +275,11 @@ class ToolCard(Widget):
             else:
                 visible = self.get_visible_logs()
                 if visible:
-                    body.update("\n".join(f"  {l}" for l in visible))
+                    body.update("\n".join(
+                        f"  {l}" if len(l) <= self._MAX_BODY_LINE
+                        else f"  {l[:self._MAX_BODY_LINE - 3]}..."
+                        for l in visible
+                    ))
                     body.display = True
                 else:
                     body.display = False

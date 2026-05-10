@@ -491,6 +491,8 @@ class PaperAgentApp(App):
         """Handle a progress event from the pipeline thread (called via call_from_thread)."""
         name = ev.stage
         now = time.monotonic()
+        is_cli_stream = bool(ev.data.get("cli_stream"))
+
         self._last_progress_at = now
         self._current_stage = name
         self._current_stage_message = ev.message
@@ -502,15 +504,28 @@ class PaperAgentApp(App):
             duration = now - stage_times[name]
 
         phase_status = {
-            "start": "running",
-            "finish": "success",
-            "fail": "failed",
-            "progress": "running",
-            "skip": "skipped",
+            "start": "running", "finish": "success", "fail": "failed",
+            "progress": "running", "skip": "skipped",
         }
         status = phase_status.get(ev.phase, "running")
 
-        # Update app-level stage views
+        # Build log lines and update ToolCard
+        log_lines = self._build_progress_log_lines(ev)
+        progress_kind = ev.data.get("progress_kind")
+        card = self._get_or_create_tool_card(name, ev.message)
+        for line in log_lines:
+            if progress_kind:
+                card.upsert_log(str(progress_kind), line)
+            else:
+                card.append_log(line)
+        card.update(status=status, message=ev.message, detail=None, duration=duration)
+
+        # cli_stream is high-frequency — update card only, skip chrome
+        if is_cli_stream:
+            self._throttled_chrome_update(name, status, ev, duration, now)
+            return
+
+        # Full update for normal events
         if name in self._stage_views:
             sv = self._stage_views[name]
             if sv.status in ("failed", "success", "skipped") and status == "running":
@@ -520,49 +535,38 @@ class PaperAgentApp(App):
             sv.detail = ev.detail or ""
             sv.duration = duration
 
-        # Build log lines from progress data
-        log_lines = self._build_progress_log_lines(ev)
-        progress_kind = ev.data.get("progress_kind")
-
-        # Get/create tool card and append logs
-        card = self._get_or_create_tool_card(name, ev.message)
-        for line in log_lines:
-            if progress_kind:
-                card.upsert_log(str(progress_kind), line)
-            else:
-                card.append_log(line)
-        card.update(
-            status=status,
-            message=ev.message,
-            detail=None,
-            duration=duration,
-        )
-
-        # Only emit timeline message on fail (as error), not start/finish
-        if ev.phase == "fail":
-            stage_label = self._STAGE_LABELS_CN.get(name, name)
-            self._add_error(f"{stage_label} 失败：{ev.message}")
-
-        # Update pipeline panel
         if self._pipeline_panel:
             self._pipeline_panel.update_from_name(
-                name=name, status=status,
-                message=ev.message, detail=ev.detail or "",
-                duration=duration,
+                name=name, status=status, message=ev.message,
+                detail=ev.detail or "", duration=duration,
             )
 
-        # Update status bar / header (throttled for high-frequency cli_stream events)
-        is_cli_stream = bool(ev.data.get("cli_stream"))
-        should_update_chrome = not is_cli_stream or (now - self._last_chrome_update_at >= 2.0)
-        if should_update_chrome:
-            self._last_chrome_update_at = now
-            if self._status_bar:
-                self._status_bar.update_info(status=status)
-            if self._header:
-                self._header.update_summary(status=status)
+        if ev.phase == "fail":
+            self._add_error(f"{self._STAGE_LABELS_CN.get(name, name)} 失败：{ev.message}")
+
+        if self._status_bar:
+            self._status_bar.update_info(status=status)
+        if self._header:
+            self._header.update_summary(status=status)
 
         if ev.phase in ("finish", "fail"):
             self._sync_artifact_panel()
+
+    def _throttled_chrome_update(
+        self, name: str, status: str, ev: ProgressEvent,
+        duration: float | None, now: float,
+    ) -> None:
+        last = getattr(self, "_last_cli_chrome_update_at", 0.0)
+        if now - last < 5.0:
+            return
+        self._last_cli_chrome_update_at = now
+        if self._pipeline_panel:
+            self._pipeline_panel.update_from_name(
+                name=name, status=status, message=ev.message,
+                detail="", duration=duration,
+            )
+        if self._status_bar:
+            self._status_bar.update_info(status=status)
 
     def _build_progress_log_lines(self, ev: ProgressEvent) -> list[str]:
         """Extract log lines from a progress event for the ToolCard buffer. Deduplicates progress bar text."""
