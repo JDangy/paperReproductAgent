@@ -1,30 +1,29 @@
-from __future__ import annotations
-
 """PaperAgentApp – Textual-based Claude Code-style TUI."""
+
+from __future__ import annotations
 
 import asyncio
 import re
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, Container
+from textual.containers import Container, Horizontal
 from textual.widgets import Static
 
-from app.agents.input_resolver_agent import InputResolverAgent, PaperInputResolution
+from app.agents.input_resolver_agent import InputResolverAgent
 from app.core.file_utils import load_state
 from app.core.progress import ProgressEvent, progress_events
 from app.core.state import TaskState
 from app.runtime.events import AgentEvent
-from app.runtime.session import Session, SessionStore, make_progress_bridge
+from app.runtime.session import Session, SessionStore
 
-from .widgets import Composer, MessageTimeline, StatusBar, ToolCard, HeaderLogo
-from .panels import SessionPanel, PipelinePanel, StageView, HelpPanel, ArtifactPanel
 from .commands import COMMANDS, RUNNING_SAFE_COMMANDS
 from .display_utils import clean_display_text
-from . import theme as T
+from .panels import ArtifactPanel, HelpPanel, PipelinePanel, SessionPanel, StageView
+from .widgets import Composer, HeaderLogo, MessageTimeline, StatusBar, ToolCard
 
 PipelineRunner = Callable[..., TaskState]
 
@@ -47,8 +46,14 @@ def _cleanup_killed_task_files(task_dir: str | None) -> None:
     if not task_dir:
         return
     import shutil
+
     td = Path(task_dir)
-    for pattern in ("repos/cloned_repo", "repos/*.zip", "repos/*.part", "downloads/*.part"):
+    for pattern in (
+        "repos/cloned_repo",
+        "repos/*.zip",
+        "repos/*.part",
+        "downloads/*.part",
+    ):
         for path in td.glob(pattern):
             try:
                 if path.is_dir():
@@ -57,6 +62,7 @@ def _cleanup_killed_task_files(task_dir: str | None) -> None:
                     path.unlink(missing_ok=True)
             except Exception:
                 pass
+
 
 # Help categories: grouped command names in display order
 _HELP_CATEGORIES: dict[str, list[str]] = {
@@ -93,6 +99,7 @@ def parse_command(line: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Main App
 # ---------------------------------------------------------------------------
+
 
 class PaperAgentApp(App):
     """Claude Code-style TUI for paper reproduction agent."""
@@ -230,6 +237,7 @@ class PaperAgentApp(App):
     def on_mount(self) -> None:
         if not self._skip_splash:
             from .widgets.boot_splash import BootSplash
+
             self.push_screen(BootSplash(), callback=self._on_splash_done)
             return
         self._on_mount_ready()
@@ -360,6 +368,7 @@ class PaperAgentApp(App):
     def _reset_stage_views(self) -> None:
         """Initialize stage views based on current backend."""
         from .panels.pipeline_panel import PIPELINE_STAGES
+
         self._stage_views.clear()
         for stage_name in PIPELINE_STAGES:
             active = self._is_stage_active(stage_name)
@@ -377,7 +386,9 @@ class PaperAgentApp(App):
         if stage in build_map:
             return build_map[stage] == self.session.backend
         if self.session.backend == "none" and stage in (
-            "Run smoke command", "Run benchmark reproduction", "Run simple reproduction",
+            "Run smoke command",
+            "Run benchmark reproduction",
+            "Run simple reproduction",
         ):
             return False
         return True
@@ -432,12 +443,19 @@ class PaperAgentApp(App):
         if self._right_session_panel:
             s = self.session
             self._right_session_panel.update_session(
-                session_id=s.id, mode=s.mode, backend=s.backend,
-                workspace=s.workspace, paper=s.paper_path or "",
-                repo=s.repo or "", repo_dir=s.repo_dir or "",
-                timeout=str(s.timeout_minutes), repairs=str(s.max_repair_attempts),
-                task_dir=s.task_dir or "", report_path=s.report_path or "",
-                status=s.status, cancel_requested=s.cancel_requested,
+                session_id=s.id,
+                mode=s.mode,
+                backend=s.backend,
+                workspace=s.workspace,
+                paper=s.paper_path or "",
+                repo=s.repo or "",
+                repo_dir=s.repo_dir or "",
+                timeout=str(s.timeout_minutes),
+                repairs=str(s.max_repair_attempts),
+                task_dir=s.task_dir or "",
+                report_path=s.report_path or "",
+                status=s.status,
+                cancel_requested=s.cancel_requested,
             )
 
     # ── Tool card helpers ────────────────────────────────────
@@ -514,7 +532,9 @@ class PaperAgentApp(App):
         "runnable_score": "可运行评分",
     }
 
-    def _handle_progress_event(self, ev: ProgressEvent, stage_times: dict[str, float]) -> None:
+    def _handle_progress_event(
+        self, ev: ProgressEvent, stage_times: dict[str, float]
+    ) -> None:
         """Handle a progress event from the pipeline thread (called via call_from_thread)."""
         name = ev.stage
         now = time.monotonic()
@@ -531,8 +551,11 @@ class PaperAgentApp(App):
             duration = now - stage_times[name]
 
         phase_status = {
-            "start": "running", "finish": "success", "fail": "failed",
-            "progress": "running", "skip": "skipped",
+            "start": "running",
+            "finish": "success",
+            "fail": "failed",
+            "progress": "running",
+            "skip": "skipped",
         }
         status = phase_status.get(ev.phase, "running")
 
@@ -564,12 +587,17 @@ class PaperAgentApp(App):
 
         if self._pipeline_panel:
             self._pipeline_panel.update_from_name(
-                name=name, status=status, message=ev.message,
-                detail=ev.detail or "", duration=duration,
+                name=name,
+                status=status,
+                message=ev.message,
+                detail=ev.detail or "",
+                duration=duration,
             )
 
         if ev.phase == "fail":
-            self._add_error(f"{self._STAGE_LABELS_CN.get(name, name)} 失败：{ev.message}")
+            self._add_error(
+                f"{self._STAGE_LABELS_CN.get(name, name)} 失败：{ev.message}"
+            )
 
         if self._status_bar:
             self._status_bar.update_info(status=status)
@@ -580,8 +608,12 @@ class PaperAgentApp(App):
             self._sync_artifact_panel()
 
     def _throttled_chrome_update(
-        self, name: str, status: str, ev: ProgressEvent,
-        duration: float | None, now: float,
+        self,
+        name: str,
+        status: str,
+        ev: ProgressEvent,
+        duration: float | None,
+        now: float,
     ) -> None:
         last = getattr(self, "_last_cli_chrome_update_at", 0.0)
         if now - last < 5.0:
@@ -589,11 +621,19 @@ class PaperAgentApp(App):
         self._last_cli_chrome_update_at = now
         if self._pipeline_panel:
             self._pipeline_panel.update_from_name(
-                name=name, status=status, message=ev.message,
-                detail="", duration=duration,
+                name=name,
+                status=status,
+                message=ev.message,
+                detail="",
+                duration=duration,
             )
         if self._status_bar:
             self._status_bar.update_info(status=status)
+        if self._header:
+            self._header.update_summary(status=status)
+        # Force full screen repaint to prevent Windows Terminal
+        # from showing black areas during long-running cli_stream stages
+        self.screen.refresh()
 
     def _build_progress_log_lines(self, ev: ProgressEvent) -> list[str]:
         """Extract log lines from a progress event for the ToolCard buffer. Deduplicates progress bar text."""
@@ -613,6 +653,7 @@ class PaperAgentApp(App):
                 return [str(bar)]
 
         seen: set[str] = set()
+
         def _add(clean: str) -> None:
             if clean and clean not in seen:
                 seen.add(clean)
@@ -622,10 +663,20 @@ class PaperAgentApp(App):
             for line in ev.detail.splitlines():
                 _add(clean_display_text(line))
 
-        for key in ("repo_url", "repo_dir", "command", "log_path", "selected_repo", "runnable_score", "proxy_status"):
+        for key in (
+            "repo_url",
+            "repo_dir",
+            "command",
+            "log_path",
+            "selected_repo",
+            "runnable_score",
+            "proxy_status",
+        ):
             val = ev.data.get(key)
             if val:
-                _add(f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{clean_display_text(str(val))}")
+                _add(
+                    f"{self._DATA_KEY_LABELS_CN.get(key, key)}：{clean_display_text(str(val))}"
+                )
 
         raw_lines = ev.data.get("log_lines")
         if isinstance(raw_lines, list):
@@ -739,7 +790,11 @@ class PaperAgentApp(App):
             lines.append(f"### {cat_name}")
             for name in cmds:
                 meta = COMMANDS[name]
-                arg_str = f" {meta.display_args or meta.args}" if (meta.display_args or meta.args) else ""
+                arg_str = (
+                    f" {meta.display_args or meta.args}"
+                    if (meta.display_args or meta.args)
+                    else ""
+                )
                 lines.append(f"- `/{name}{arg_str}` — {meta.description}")
             lines.append("")
         if not shown and cat:
@@ -755,11 +810,14 @@ class PaperAgentApp(App):
 
         # Try completion to suggest alternatives
         from .completion import complete_command
+
         suggestions = complete_command(f"/{cmd_name}", limit=4)
         if suggestions:
             sug_lines = [f"未知命令：`/{cmd_name}`", "", "你可能想输入："]
             for s in suggestions:
-                arg_str = f" {s.display_args or s.args}" if (s.display_args or s.args) else ""
+                arg_str = (
+                    f" {s.display_args or s.args}" if (s.display_args or s.args) else ""
+                )
                 sug_lines.append(f"  `/{s.command}{arg_str}` — {s.description}")
             self._add_assistant("\n".join(sug_lines))
         else:
@@ -774,8 +832,12 @@ class PaperAgentApp(App):
 
     def _cmd_status(self, _: str) -> None:
         if self.agent_running:
-            elapsed = time.monotonic() - self._run_started_at if self._run_started_at else 0
-            stage_label = self._STAGE_LABELS_CN.get(self._current_stage or "", self._current_stage or "-")
+            elapsed = (
+                time.monotonic() - self._run_started_at if self._run_started_at else 0
+            )
+            stage_label = self._STAGE_LABELS_CN.get(
+                self._current_stage or "", self._current_stage or "-"
+            )
             self._add_assistant(
                 "## 当前任务正在运行\n\n"
                 f"- 当前阶段：**{stage_label}**\n"
@@ -830,7 +892,9 @@ class PaperAgentApp(App):
     def _cmd_arxiv(self, args: str) -> None:
         value = args.strip()
         if not value:
-            self._add_error("用法：`/arxiv <arXiv ID 或 URL>`，例如 `/arxiv https://arxiv.org/abs/1911.11763`")
+            self._add_error(
+                "用法：`/arxiv <arXiv ID 或 URL>`，例如 `/arxiv https://arxiv.org/abs/1911.11763`"
+            )
             return
         if self.agent_running:
             self._add_error("Agent 正在运行，请等待任务完成或先 `/cancel`。")
@@ -840,14 +904,19 @@ class PaperAgentApp(App):
 
     async def _download_arxiv_worker(self, value: str) -> None:
         from app.core.paths import project_pdf_dir
-        from app.tools.arxiv_download import download_arxiv_pdf, make_progress_bar as arxiv_bar
+        from app.tools.arxiv_download import (
+            download_arxiv_pdf,
+            make_progress_bar as arxiv_bar,
+        )
 
         def progress_cb(event: dict) -> None:
             phase = event.get("phase")
             if phase == "start":
-                self.call_from_thread(lambda: self._add_system(
-                    f"arXiv 下载开始\n- URL：{event.get('pdf_url')}\n- 保存：{event.get('pdf_path')}"
-                ))
+                self.call_from_thread(
+                    lambda: self._add_system(
+                        f"arXiv 下载开始\n- URL：{event.get('pdf_url')}\n- 保存：{event.get('pdf_path')}"
+                    )
+                )
             elif phase == "progress":
                 pct = event.get("percent")
                 dl = int(event.get("downloaded") or 0)
@@ -857,13 +926,20 @@ class PaperAgentApp(App):
                 if tot:
                     msg += f" / {tot / 1024 / 1024:.1f} MiB"
                 final_msg = msg
-                self.call_from_thread(lambda m=final_msg: self._upsert_arxiv_progress(m))
+                self.call_from_thread(
+                    lambda m=final_msg: self._upsert_arxiv_progress(m)
+                )
             elif phase == "finish":
-                self.call_from_thread(lambda: self._upsert_arxiv_progress("下载完成，正在导入"))
+                self.call_from_thread(
+                    lambda: self._upsert_arxiv_progress("下载完成，正在导入")
+                )
 
         result = await asyncio.to_thread(
-            download_arxiv_pdf, value,
-            output_dir=project_pdf_dir(), overwrite=False, progress_cb=progress_cb,
+            download_arxiv_pdf,
+            value,
+            output_dir=project_pdf_dir(),
+            overwrite=False,
+            progress_cb=progress_cb,
         )
 
         if result.success and result.pdf_path:
@@ -883,9 +959,7 @@ class PaperAgentApp(App):
             if card:
                 card.update(status="success", message="下载 arXiv PDF")
         else:
-            self._add_error(
-                f"arXiv PDF 下载失败：{result.error or '未知错误'}"
-            )
+            self._add_error(f"arXiv PDF 下载失败：{result.error or '未知错误'}")
 
     def _upsert_arxiv_progress(self, text: str) -> None:
         stage = "Download arXiv PDF"
@@ -907,7 +981,9 @@ class PaperAgentApp(App):
         backend = args.strip().lower()
         if backend:
             if backend not in {"none", "local", "venv", "conda", "docker"}:
-                self._add_error("后端必须是：none、local、venv、conda 或 docker\n用法：`/backend conda`")
+                self._add_error(
+                    "后端必须是：none、local、venv、conda 或 docker\n用法：`/backend conda`"
+                )
                 return
             self.session.backend = backend
             self._sync_session_panel()
@@ -919,17 +995,28 @@ class PaperAgentApp(App):
                     "如需运行复现步骤，请使用 `/backend conda`。"
                 )
             elif backend == "conda":
-                self._add_assistant("已切换到 **conda** 模式：将构建 conda 环境并执行 smoke/Benchmark/轻量复现。")
+                self._add_assistant(
+                    "已切换到 **conda** 模式：将构建 conda 环境并执行 smoke/Benchmark/轻量复现。"
+                )
             elif backend == "venv":
-                self._add_assistant("已切换到 **venv** 模式：将构建虚拟环境并执行 smoke/Benchmark/轻量复现。")
+                self._add_assistant(
+                    "已切换到 **venv** 模式：将构建虚拟环境并执行 smoke/Benchmark/轻量复现。"
+                )
             elif backend == "local":
-                self._add_assistant("已切换到 **local** 模式：跳过环境构建，直接在本地执行 smoke/Benchmark/轻量复现。")
+                self._add_assistant(
+                    "已切换到 **local** 模式：跳过环境构建，直接在本地执行 smoke/Benchmark/轻量复现。"
+                )
             elif backend == "docker":
-                self._add_assistant("已切换到 **docker** 模式：将构建 Docker 镜像并执行 smoke/Benchmark/轻量复现。")
+                self._add_assistant(
+                    "已切换到 **docker** 模式：将构建 Docker 镜像并执行 smoke/Benchmark/轻量复现。"
+                )
             if self._pipeline_panel:
                 self._pipeline_panel.reset(backend)
         else:
-            opts = " | ".join(f"**{b}**" if b == self.session.backend else b for b in ["none", "local", "venv", "conda", "docker"])
+            opts = " | ".join(
+                f"**{b}**" if b == self.session.backend else b
+                for b in ["none", "local", "venv", "conda", "docker"]
+            )
             self._add_assistant(f"可用后端：{opts}\n当前：**{self.session.backend}**")
 
     def _cmd_workspace(self, args: str) -> None:
@@ -995,7 +1082,9 @@ class PaperAgentApp(App):
 
     @staticmethod
     def _status_label(status: str) -> str:
-        return {"success": "✓", "failed": "✗", "running": "●", "cancelled": "○"}.get(status, "–")
+        return {"success": "✓", "failed": "✗", "running": "●", "cancelled": "○"}.get(
+            status, "–"
+        )
 
     def _cmd_run(self, _: str) -> None:
         paper = self.session.paper_path
@@ -1101,12 +1190,18 @@ class PaperAgentApp(App):
 
             self.session.task_dir = state.task_dir
             self.session.status = getattr(state, "status", "completed")
-            report_path = Path(state.task_dir) / "report" / "reproduction_smoke_report.md"
+            report_path = (
+                Path(state.task_dir) / "report" / "reproduction_smoke_report.md"
+            )
             if report_path.exists():
                 self.session.report_path = str(report_path)
 
             # Build final message
-            final = getattr(state.report, "final_status", "unknown") if state.report else "unknown"
+            final = (
+                getattr(state.report, "final_status", "unknown")
+                if state.report
+                else "unknown"
+            )
             if final == "repo_found_smoke_not_run" and self.session.backend == "none":
                 self._add_assistant(
                     f"**Pipeline 完成**\n\n"
@@ -1122,7 +1217,9 @@ class PaperAgentApp(App):
                 )
 
             if report_path.exists():
-                preview = report_path.read_text(encoding="utf-8", errors="ignore")[:2000]
+                preview = report_path.read_text(encoding="utf-8", errors="ignore")[
+                    :2000
+                ]
                 self._add_report_msg(preview)
 
             self._sync_session_panel()
@@ -1172,6 +1269,7 @@ class PaperAgentApp(App):
         self._add_error("已请求强制终止：正在杀掉当前任务相关子进程……")
 
         from app.core.process_control import get_process_registry
+
         killed = get_process_registry().kill_all()
         if killed:
             self._add_system("已终止子进程：\n" + "\n".join(f"- {x}" for x in killed))
@@ -1201,8 +1299,10 @@ class PaperAgentApp(App):
 
         if self._current_stage and self._pipeline_panel:
             self._pipeline_panel.update_from_name(
-                name=self._current_stage, status="failed",
-                message="已强制终止", detail="force killed",
+                name=self._current_stage,
+                status="failed",
+                message="已强制终止",
+                detail="force killed",
             )
 
         # Cleanup incomplete files
@@ -1228,11 +1328,17 @@ class PaperAgentApp(App):
         if self._last_progress_at and now - self._last_progress_at < 12:
             return
         elapsed = now - self._run_started_at if self._run_started_at else 0
-        stage_label = self._STAGE_LABELS_CN.get(self._current_stage or "", self._current_stage or "Pipeline")
+        stage_label = self._STAGE_LABELS_CN.get(
+            self._current_stage or "", self._current_stage or "Pipeline"
+        )
 
         text = f"仍在运行：{stage_label} 已持续 {elapsed:.0f}s，可能正在等待网络、克隆仓库、解析依赖或模型响应。"
 
-        card = self._get_active_tool_card(self._current_stage or "") if self._current_stage else None
+        card = (
+            self._get_active_tool_card(self._current_stage or "")
+            if self._current_stage
+            else None
+        )
         if card is not None:
             # Replace previous heartbeat in this card instead of stacking
             clean = clean_display_text(text)
@@ -1292,7 +1398,9 @@ class PaperAgentApp(App):
             self._add_error("!shell 需要命令参数。例如：`!ls -la`")
             return
         self._pending_shell = cmd
-        self._add_assistant(f"即将执行 shell 命令：\n```\n{cmd}\n```\n输入 `yes` 确认，或输入其他内容取消。")
+        self._add_assistant(
+            f"即将执行 shell 命令：\n```\n{cmd}\n```\n输入 `yes` 确认，或输入其他内容取消。"
+        )
 
     def _confirm_shell(self, line: str) -> None:
         if line.strip().lower() not in ("yes", "y"):
@@ -1302,8 +1410,11 @@ class PaperAgentApp(App):
         cmd = self._pending_shell
         self._pending_shell = None
         import subprocess
+
         try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=30
+            )
             output = result.stdout[:3000] or "(no stdout)"
             if result.stderr:
                 output += f"\n\nstderr:\n{result.stderr[:1000]}"
@@ -1353,8 +1464,7 @@ class PaperAgentApp(App):
         if log_type not in log_map:
             opts = ", ".join(sorted(log_map.keys()))
             self._add_assistant(
-                f"未知日志类型 `{log_type}`。可用：{opts}\n"
-                f"用法：`/logs smoke`"
+                f"未知日志类型 `{log_type}`。可用：{opts}\n" f"用法：`/logs smoke`"
             )
             return
 
@@ -1366,7 +1476,9 @@ class PaperAgentApp(App):
         content = path.read_text(encoding="utf-8", errors="ignore")
         if len(content) > 5000:
             content = content[-5000:] + "\n\n... [dim](最后 5000 字符)[/]"
-        self._add_tool_message(f"**{log_type} log** (`{path}`)\n\n```\n{content}\n```", "日志")
+        self._add_tool_message(
+            f"**{log_type} log** (`{path}`)\n\n```\n{content}\n```", "日志"
+        )
 
     # ── Report ───────────────────────────────────────────────
 
@@ -1401,6 +1513,7 @@ class PaperAgentApp(App):
             created = s.get("created_at", "")
             if isinstance(created, (int, float)):
                 from datetime import datetime
+
                 created = datetime.fromtimestamp(created).strftime("%Y-%m-%d %H:%M")
             lines.append(f"| {sid} | {paper} | {be} | {st} | {created} |")
         self._add_assistant("\n".join(lines))
@@ -1467,7 +1580,11 @@ class PaperAgentApp(App):
         )
 
     def _cmd_conda_envs_list(self) -> None:
-        from app.tools.conda_env_manager import discover_project_conda_envs, format_env_table
+        from app.tools.conda_env_manager import (
+            discover_project_conda_envs,
+            format_env_table,
+        )
+
         envs = discover_project_conda_envs(self.session.workspace)
         if not envs:
             self._add_assistant(
@@ -1487,13 +1604,21 @@ class PaperAgentApp(App):
 
     def _cmd_conda_envs_delete(self, selector: str) -> None:
         if self.agent_running:
-            self._add_error("Agent 正在运行，暂不允许删除 conda 环境。请先 `/cancel` 或等待任务完成。")
+            self._add_error(
+                "Agent 正在运行，暂不允许删除 conda 环境。请先 `/cancel` 或等待任务完成。"
+            )
             return
         if not selector:
-            self._add_error("用法：`/conda-envs delete <编号|slug|路径>` 或 `/conda-envs delete --all`")
+            self._add_error(
+                "用法：`/conda-envs delete <编号|slug|路径>` 或 `/conda-envs delete --all`"
+            )
             return
 
-        from app.tools.conda_env_manager import discover_project_conda_envs, find_env_by_selector
+        from app.tools.conda_env_manager import (
+            discover_project_conda_envs,
+            find_env_by_selector,
+        )
+
         envs = discover_project_conda_envs(self.session.workspace)
 
         if selector == "--all":
@@ -1510,7 +1635,9 @@ class PaperAgentApp(App):
 
         env = find_env_by_selector(selector, envs)
         if env is None:
-            self._add_error(f"未找到环境：`{selector}`。请先输入 `/conda-envs` 查看可删除环境列表。")
+            self._add_error(
+                f"未找到环境：`{selector}`。请先输入 `/conda-envs` 查看可删除环境列表。"
+            )
             return
 
         self._pending_env_delete = {"mode": "one", "env": env}
