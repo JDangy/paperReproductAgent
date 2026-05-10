@@ -89,6 +89,7 @@ def _run_pipeline(
     from app.agents.docker_build_agent import DockerBuildAgent
     from app.agents.conda_build_agent import CondaBuildAgent
     from app.agents.venv_build_agent import VenvBuildAgent
+    from app.agents.runtime_decision_agent import RuntimeDecisionAgent
     from app.agents.smoke_run_agent import SmokeRunAgent
     from app.agents.benchmark_reproduction_agent import BenchmarkReproductionAgent
     from app.agents.simple_reproduction_agent import SimpleReproductionAgent
@@ -103,6 +104,7 @@ def _run_pipeline(
         agents.append(("Search GitHub", GitHubSearchAgent()))
 
     agents.append(("Evaluate repo", RepoEvaluationAgent()))
+    agents.append(("Decide runtime", RuntimeDecisionAgent()))
 
     if backend == "docker":
         agents.extend([
@@ -243,6 +245,8 @@ def _step_succeeded(desc: str, state: TaskState) -> bool:
         return bool(state.repo_candidates)
     if desc == "Evaluate repo":
         return state.repo_evaluation is not None
+    if desc == "Decide runtime":
+        return state.runtime_decision is not None
     return state.status not in {"failed", "cancelled"}
 
 

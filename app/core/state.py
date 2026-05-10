@@ -16,6 +16,7 @@ TaskStatus = Literal[
     "paper_understood",
     "repo_found",
     "repo_evaluated",
+    "runtime_decided",
     "env_built",
     "smoke_ran",
     "benchmark_planned",
@@ -162,6 +163,34 @@ class ReproductionRunResult(BaseModel):
     comparisons: list[dict[str, Any]] = Field(default_factory=list)
 
 
+RuntimeDevice = Literal["cpu", "cuda", "skip"]
+CudaRequirement = Literal["not_needed", "optional", "required", "unknown"]
+
+
+class HostCudaInfo(BaseModel):
+    has_nvidia_smi: bool = False
+    has_gpu: bool = False
+    gpu_name: str | None = None
+    driver_version: str | None = None
+    cuda_version: str | None = None
+    nvcc_version: str | None = None
+    error: str | None = None
+
+
+class RuntimeDecision(BaseModel):
+    cuda_requirement: CudaRequirement = "unknown"
+    selected_device: RuntimeDevice = "cpu"
+    torch_variant: Literal["cpu", "cuda", "unknown"] = "cpu"
+    torch_version_constraint: str | None = None
+    cuda_wheel_tag: str | None = None
+    compatible: bool = True
+    skip_execution: bool = False
+    reason: str = ""
+    evidence: list[str] = Field(default_factory=list)
+    host_cuda: HostCudaInfo = Field(default_factory=HostCudaInfo)
+    install_plan: list[list[str]] = Field(default_factory=list)
+
+
 class ReportResult(BaseModel):
     final_status: FinalStatus
     report_markdown_path: str
@@ -201,6 +230,7 @@ class TaskState(BaseModel):
     repo_evaluation: Optional[RepoEvaluation] = None
 
     env_build: Optional[EnvironmentBuildResult] = None
+    runtime_decision: Optional[RuntimeDecision] = None
     smoke_run: Optional[SmokeRunResult] = None
     benchmark_plan: list[BenchmarkSpec] = Field(default_factory=list)
     benchmark_run: Optional[BenchmarkRunResult] = None

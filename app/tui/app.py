@@ -461,6 +461,7 @@ class PaperAgentApp(App):
         "Build conda env": "构建 conda 环境",
         "Build virtualenv": "构建虚拟环境",
         "Build Docker image": "构建 Docker 镜像",
+        "Decide runtime": "判断运行环境",
         "Run smoke command": "运行冒烟测试",
         "Run benchmark reproduction": "运行 benchmark 复现",
         "Run simple reproduction": "运行轻量复现",

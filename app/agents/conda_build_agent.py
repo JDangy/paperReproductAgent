@@ -20,6 +20,7 @@ from app.tools.repo_tool import (
     find_requirement_files,
 )
 from app.tools.conda_env_manager import write_project_env_marker
+from app.tools.torch_install_policy import strip_torch_family_requirements
 
 
 class CondaBuildAgent:
@@ -102,7 +103,26 @@ class CondaBuildAgent:
                 step_name="upgrade pip tooling",
             )
 
+            # Install PyTorch per runtime decision
+            if state.runtime_decision and state.runtime_decision.install_plan:
+                for i, plan_cmd in enumerate(state.runtime_decision.install_plan):
+                    resolved = [str(python_bin) if p == "python" else p for p in plan_cmd]
+                    self._run_step(
+                        resolved, cwd=repo_dir, deadline=deadline,
+                        log_parts=log_parts,
+                        step_name=f"install pytorch runtime ({i + 1}/{len(state.runtime_decision.install_plan)})",
+                    )
+
             for requirements_path in find_requirement_files(repo_dir):
+                # Filter torch family if runtime_decision exists
+                if state.runtime_decision:
+                    original = requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+                    filtered = strip_torch_family_requirements(original)
+                    if filtered != original:
+                        filtered_path = env_dir / f"{requirements_path.stem}_no_torch.txt"
+                        filtered_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+                        log_parts.append(f"Filtered torch family from {requirements_path.name} per runtime decision")
+                        requirements_path = filtered_path
                 self._install_requirements_with_relax_retry(
                     pip_cmd=pip_cmd,
                     requirements_path=requirements_path,
