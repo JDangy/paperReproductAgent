@@ -42,12 +42,20 @@ class GitHubSearchAgent:
 
         title = state.paper_metadata.title if state.paper_metadata else None
         arxiv_id = state.paper_metadata.arxiv_id if state.paper_metadata else None
-        name_signals = [signal for signal in [title, _input_name_signal(state.input_value)] if signal]
+        name_signals = [
+            signal
+            for signal in [title, _input_name_signal(state.input_value)]
+            if signal
+        ]
 
         # 1. GitHub links found in paper text
         if state.reproduction_brief:
             link_count = len(state.reproduction_brief.github_links_in_paper)
-            emit_progress("Search GitHub", "checking links from paper", detail=f"{link_count} link(s)")
+            emit_progress(
+                "Search GitHub",
+                "checking links from paper",
+                detail=f"{link_count} link(s)",
+            )
             for url in state.reproduction_brief.github_links_in_paper[:5]:
                 emit_progress("Search GitHub", "resolving paper link", detail=url)
                 repo_urls = get_github_repo_urls_from_page(url, max_results=5)
@@ -72,33 +80,51 @@ class GitHubSearchAgent:
         # 2. Search by arXiv ID (repos often reference their arXiv ID)
         if arxiv_id:
             self._search_and_add(
-                arxiv_id, candidates, seen_urls, "GitHub arXiv ID search",
+                arxiv_id,
+                candidates,
+                seen_urls,
+                "GitHub arXiv ID search",
                 base_score=50.0,
             )
 
         # 3. Search by title — high confidence signal, score above keyword searches
         if title:
             self._search_and_add(
-                title, candidates, seen_urls, "GitHub title search",
+                title,
+                candidates,
+                seen_urls,
+                "GitHub title search",
                 base_score=55.0,
             )
             self._search_and_add(
-                f"{title} github", candidates, seen_urls, "GitHub title+github search",
+                f"{title} github",
+                candidates,
+                seen_urls,
+                "GitHub title+github search",
                 base_score=50.0,
             )
 
         # 4. Search by method keywords, prioritizing method names over generic acronyms.
-        keywords = state.reproduction_brief.method_keywords if state.reproduction_brief else []
+        keywords = (
+            state.reproduction_brief.method_keywords if state.reproduction_brief else []
+        )
         if keywords:
             for kw in self._rank_keywords_for_search(keywords)[:5]:
                 self._search_and_add(
-                    kw, candidates, seen_urls, f"GitHub keyword search: {kw}",
+                    kw,
+                    candidates,
+                    seen_urls,
+                    f"GitHub keyword search: {kw}",
                     base_score=35.0,
                 )
 
         # Boost score for repos whose name matches a keyword
         if keywords:
-            emit_progress("Search GitHub", "scoring keyword/name matches", detail=f"{len(candidates)} candidate(s)")
+            emit_progress(
+                "Search GitHub",
+                "scoring keyword/name matches",
+                detail=f"{len(candidates)} candidate(s)",
+            )
             keyword_lower = {kw.lower() for kw in keywords}
             for c in candidates:
                 if c.name and c.name.lower() in keyword_lower:
@@ -112,10 +138,19 @@ class GitHubSearchAgent:
         # PDF text extraction can mistake a body line for the title; local filenames
         # such as lightglue.pdf are often a cleaner method-name signal.
         if name_signals:
-            emit_progress("Search GitHub", "scoring title/name matches", detail="; ".join(name_signals))
+            emit_progress(
+                "Search GitHub",
+                "scoring title/name matches",
+                detail="; ".join(name_signals),
+            )
             title_words = (
-                {w.lower() for w in title.replace(":", " ").replace("-", " ").split() if len(w) > 2}
-                if title else set()
+                {
+                    w.lower()
+                    for w in title.replace(":", " ").replace("-", " ").split()
+                    if len(w) > 2
+                }
+                if title
+                else set()
             )
             for c in candidates:
                 if c.name:
@@ -127,7 +162,11 @@ class GitHubSearchAgent:
                         c.score += 20
                         c.reasons.append("Repo name contains paper/input method token")
 
-        emit_progress("Search GitHub", "reranking repository candidates", detail=f"{len(candidates)} candidate(s)")
+        emit_progress(
+            "Search GitHub",
+            "reranking repository candidates",
+            detail=f"{len(candidates)} candidate(s)",
+        )
         self._llm_rerank_candidates(state, candidates)
 
         candidates.sort(key=lambda c: c.score, reverse=True)
@@ -144,9 +183,13 @@ class GitHubSearchAgent:
                 candidate_count=len(candidates),
             )
         else:
-            state.errors.append({"agent": "GitHubSearchAgent", "error": "No repo candidates found"})
+            state.errors.append(
+                {"agent": "GitHubSearchAgent", "error": "No repo candidates found"}
+            )
             state.status = "failed"
-            emit_progress("Search GitHub", "no repository candidates found", level="error")
+            emit_progress(
+                "Search GitHub", "no repository candidates found", level="error"
+            )
 
         return state
 
@@ -159,13 +202,22 @@ class GitHubSearchAgent:
     def _keyword_search_sort_key(self, keyword: str) -> tuple[int, int, str]:
         lowered = keyword.lower()
         generic_short_terms = {
-            "vit-b", "vit-l", "vit-h", "cnn", "rnn", "gan", "bert", "clip",
+            "vit-b",
+            "vit-l",
+            "vit-h",
+            "cnn",
+            "rnn",
+            "gan",
+            "bert",
+            "clip",
         }
         if lowered in generic_short_terms:
             return (4, len(keyword), keyword)
 
         compact = " " not in keyword and "-" not in keyword
-        has_mixed_case = any(c.islower() for c in keyword) and any(c.isupper() for c in keyword)
+        has_mixed_case = any(c.islower() for c in keyword) and any(
+            c.isupper() for c in keyword
+        )
         if compact and len(keyword) >= 6 and has_mixed_case:
             return (0, len(keyword), keyword)
 
@@ -257,8 +309,15 @@ class GitHubSearchAgent:
         if normalized in seen_urls:
             return
 
+        import time as _time
+
         owner, name = parsed
         info = get_repo_info(owner, name)
+        # Retry once if API call failed — direct paper links should not be
+        # penalized by transient network / rate-limit issues.
+        if info is None and source == "paper":
+            _time.sleep(0.5)
+            info = get_repo_info(owner, name)
         score = base_score
         stars = None
 
@@ -277,6 +336,13 @@ class GitHubSearchAgent:
             if info.get("fork"):
                 score -= 10
                 reasons.append("Repo is a fork")
+        else:
+            # Even without star data, being a direct paper link is a strong
+            # signal — award partial star bonus to avoid being outranked
+            # by unrelated repos whose API calls happened to succeed.
+            if source == "paper":
+                score += 6
+                reasons.append("Direct paper link (star data unavailable)")
 
         readme = get_repo_readme(owner, name)
         if readme and title and title.lower() in readme.lower():
@@ -308,7 +374,9 @@ class GitHubSearchAgent:
             score=score,
         )
 
-    def _llm_rerank_candidates(self, state: TaskState, candidates: list[RepoCandidate]) -> None:
+    def _llm_rerank_candidates(
+        self, state: TaskState, candidates: list[RepoCandidate]
+    ) -> None:
         if len(candidates) < 2:
             return
 
@@ -316,10 +384,22 @@ class GitHubSearchAgent:
         payload = {
             "paper": {
                 "title": state.paper_metadata.title if state.paper_metadata else None,
-                "arxiv_id": state.paper_metadata.arxiv_id if state.paper_metadata else None,
-                "task": state.reproduction_brief.task if state.reproduction_brief else None,
-                "method_keywords": state.reproduction_brief.method_keywords if state.reproduction_brief else [],
-                "links_in_paper": state.reproduction_brief.github_links_in_paper if state.reproduction_brief else [],
+                "arxiv_id": (
+                    state.paper_metadata.arxiv_id if state.paper_metadata else None
+                ),
+                "task": (
+                    state.reproduction_brief.task if state.reproduction_brief else None
+                ),
+                "method_keywords": (
+                    state.reproduction_brief.method_keywords
+                    if state.reproduction_brief
+                    else []
+                ),
+                "links_in_paper": (
+                    state.reproduction_brief.github_links_in_paper
+                    if state.reproduction_brief
+                    else []
+                ),
             },
             "candidates": [self._candidate_llm_context(c) for c in ranked],
         }
@@ -348,12 +428,19 @@ class GitHubSearchAgent:
             confidence = 0.0
 
         if confidence < 0.5:
-            emit_progress("Search GitHub", "LLM rerank confidence too low", level="warning", detail=f"{confidence:.2f}")
+            emit_progress(
+                "Search GitHub",
+                "LLM rerank confidence too low",
+                level="warning",
+                detail=f"{confidence:.2f}",
+            )
             return
 
         max_score = max(c.score for c in candidates)
         selected.score = max(selected.score, max_score + 20.0)
-        reason = str(result.get("reason") or "LLM selected as likely official repository")
+        reason = str(
+            result.get("reason") or "LLM selected as likely official repository"
+        )
         selected.reasons.append(f"LLM rerank selected this repo: {reason[:200]}")
         if confidence >= 0.75:
             selected.confidence = "high"

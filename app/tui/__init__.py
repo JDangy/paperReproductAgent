@@ -18,6 +18,7 @@ def run_tui(
     backend: str,
     timeout_minutes: int,
     max_repair_attempts: int,
+    skip_splash: bool = False,
 ) -> None:
     """Launch the Textual TUI application."""
     app = PaperAgentApp(
@@ -26,5 +27,6 @@ def run_tui(
         backend=backend,
         timeout_minutes=timeout_minutes,
         max_repair_attempts=max_repair_attempts,
+        skip_splash=skip_splash,
     )
     app.run()

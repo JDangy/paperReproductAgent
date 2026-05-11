@@ -36,3 +36,51 @@ class TaskPaths:
 
 def generate_task_id() -> str:
     return datetime.now().strftime("task_%Y%m%d_%H%M%S_%f")
+
+
+# ── Project root / workspace resolution ─────────────────────
+
+def find_project_root(start: Path | None = None) -> Path:
+    """Search upward from this file until pyproject.toml and app/ are found."""
+    current = (start or Path(__file__)).resolve()
+    if current.is_file():
+        current = current.parent
+    for parent in [current, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "app").exists():
+            return parent
+    # Fallback: app/core/paths.py → app/core → app → project root
+    return Path(__file__).resolve().parents[2]
+
+
+def default_project_workspace() -> Path:
+    return find_project_root() / "workspace"
+
+
+def project_pdf_dir() -> Path:
+    return find_project_root() / "pdf"
+
+
+def resolve_workspace_path(value: str | Path | None, *, explicit: bool = False) -> Path:
+    """Resolve a workspace path.
+
+    - None/empty → project_root/workspace
+    - './workspace' (default, not explicit) → project_root/workspace
+    - absolute → as-is
+    - explicit relative → cwd-relative
+    """
+    if value is None or str(value).strip() == "":
+        return default_project_workspace().resolve()
+
+    raw = str(value).strip()
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+
+    normalized = raw.replace("\\", "/").strip()
+    if not explicit and normalized in {"workspace", "./workspace", ".\\workspace"}:
+        return default_project_workspace().resolve()
+
+    if explicit:
+        return p.resolve()
+
+    return (find_project_root() / p).resolve()

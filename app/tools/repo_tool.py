@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import shutil
 import subprocess
+import time
 import zipfile
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 
-import git
 import httpx
 import yaml
+
+from app.core.progress import emit_progress
+from app.core.cancellation import is_cancelled, raise_if_cancelled, PipelineCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -34,70 +41,277 @@ _ENV_PACKAGE_RENAMES = {
 
 
 def clone_repo(url: str, dest_dir: Path, max_retries: int = 3) -> Path:
-    """Clone a git repo with retry and fallback to zip download."""
+    """Clone a git repo with retry, progress, cancel, and zip fallback."""
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
 
-    # Try git clone with retries
+    proxies = detect_git_proxy()
+    if proxies:
+        proxy_lines = [f"{k}={mask_proxy_url(v)}" for k, v in sorted(proxies.items())]
+        emit_progress("Evaluate repo", "检测到 Git 代理配置",
+                      detail="\n".join(f"  - {x}" for x in proxy_lines),
+                      proxy_status="检测到代理", log_lines=proxy_lines)
+    else:
+        emit_progress("Evaluate repo", "未检测到代理", proxy_status="无代理")
+
+    clone_env = {**os.environ}
+    for k, v in proxies.items():
+        clone_env[k] = v
+
     last_error = None
     for attempt in range(1, max_retries + 1):
+        raise_if_cancelled()
+        emit_progress("Evaluate repo",
+                      f"正在克隆仓库，第 {attempt}/{max_retries} 次尝试",
+                      detail=f"仓库地址：{url}", repo_url=url)
         try:
-            logger.info("git clone attempt %d/%d: %s", attempt, max_retries, url)
-            git.Repo.clone_from(url, dest_dir, depth=1)
+            _clone_subprocess(url, dest_dir, env=clone_env)
             return dest_dir
+        except PipelineCancelled:
+            _cleanup_clone(dest_dir)
+            raise
         except Exception as e:
             last_error = e
-            logger.warning("git clone attempt %d failed: %s", attempt, e)
-            if dest_dir.exists():
-                shutil.rmtree(dest_dir)
+            emit_progress("Evaluate repo", f"克隆失败（第 {attempt}/{max_retries} 次）",
+                          level="warning", detail=str(e)[-500:])
+            _cleanup_clone(dest_dir)
+            time.sleep(1)
 
-    # Fallback: download zip
-    logger.info("git clone failed after %d attempts, trying zip download", max_retries)
+    raise_if_cancelled()
+    emit_progress("Evaluate repo", "Git clone 失败，尝试 Zip 下载", level="warning")
     try:
         return _download_repo_zip(url, dest_dir)
+    except PipelineCancelled:
+        _cleanup_clone(dest_dir)
+        raise
     except Exception as zip_err:
-        logger.error("zip download also failed: %s", zip_err)
+        _cleanup_clone(dest_dir)
         raise last_error
 
 
+def _cleanup_clone(dest_dir: Path) -> None:
+    if dest_dir.exists():
+        shutil.rmtree(dest_dir, ignore_errors=True)
+    zip_path = dest_dir.parent / (dest_dir.name + ".zip")
+    if zip_path.exists():
+        zip_path.unlink(missing_ok=True)
+
+
+def _clone_subprocess(url: str, dest_dir: Path, *, env: dict | None = None, timeout_seconds: int = 600) -> Path:
+    env = env or os.environ.copy()
+    cmd = ["git", "clone", "--depth", "1", "--progress", url, str(dest_dir)]
+
+    emit_progress("Evaluate repo", "开始克隆仓库",
+                  detail=f"git clone --depth 1 --progress {url}", repo_url=url)
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="ignore", env=env, bufsize=1,
+    )
+
+    stderr_q: Queue[str] = Queue()
+    stdout_q: Queue[str] = Queue()
+    if proc.stderr is not None:
+        Thread(target=_enqueue_lines, args=(proc.stderr, stderr_q), daemon=True).start()
+    if proc.stdout is not None:
+        Thread(target=_enqueue_lines, args=(proc.stdout, stdout_q), daemon=True).start()
+
+    start = time.monotonic()
+    last_emit = 0.0
+    last_pct: int | None = None
+
+    try:
+        while True:
+            raise_if_cancelled()
+
+            now = time.monotonic()
+            if now - start > timeout_seconds:
+                proc.kill()
+                raise TimeoutError(f"git clone timeout after {timeout_seconds}s")
+
+            got_line = False
+            for q in (stderr_q, stdout_q):
+                while True:
+                    try:
+                        raw = q.get_nowait()
+                    except Empty:
+                        break
+                    got_line = True
+                    for part in raw.replace("\r", "\n").splitlines():
+                        clean = normalize_git_line(part)
+                        if not clean:
+                            continue
+                        pct = _extract_pct(clean)
+                        if (pct is not None and pct != last_pct) or now - last_emit >= 1.0:
+                            last_emit = now
+                            if pct is not None:
+                                last_pct = pct
+                            bar = make_progress_bar(pct)
+                            emit_progress("Evaluate repo", "正在克隆仓库",
+                                          detail=None,
+                                          progress_kind="git_clone",
+                                          progress_percent=pct,
+                                          progress_bar=bar,
+                                          progress_text=clean)
+
+            if proc.poll() is not None:
+                break
+            if not got_line:
+                time.sleep(0.1)
+
+        if proc.returncode != 0:
+            tail = "".join(_drain_queue(q) for q in (stderr_q, stdout_q)).strip()
+            msg = tail or f"git clone failed exit {proc.returncode}"
+            emit_progress("Evaluate repo", "克隆仓库失败", level="warning", detail=msg[-1200:])
+            raise RuntimeError(msg)
+
+        emit_progress("Evaluate repo", "仓库克隆完成", detail=f"目标目录：{dest_dir}")
+        return dest_dir
+
+    except Exception:
+        _cleanup_clone(dest_dir)
+        raise
+
+
+def _enqueue_lines(pipe, q: Queue[str]) -> None:
+    try:
+        for line in iter(pipe.readline, ""):
+            if line:
+                q.put(line)
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _drain_queue(q: Queue[str]) -> list[str]:
+    items: list[str] = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except Empty:
+            break
+    return items
+
+
+def detect_git_proxy() -> dict[str, str]:
+    """Detect proxy from env vars and git global config."""
+    proxies: dict[str, str] = {}
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        v = os.environ.get(k)
+        if v:
+            proxies[k] = v
+    for cn in ("http.proxy", "https.proxy"):
+        try:
+            r = subprocess.run(["git", "config", "--global", "--get", cn],
+                               capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                proxies[f"git_{cn.replace('.', '_')}"] = r.stdout.strip()
+        except Exception:
+            pass
+    return proxies
+
+
+def mask_proxy_url(value: str) -> str:
+    """Mask credentials in proxy URLs. http://u:p@h:p → http://***@h:p"""
+    return re.sub(r"(https?://)([^:@/]+):([^@/]+)@", r"\1***@", value)
+
+
+def make_progress_bar(percent: int | None, width: int = 15) -> str:
+    if percent is None or percent < 0:
+        return ""
+    pct = min(int(percent), 100)
+    fill = int(width * pct / 100)
+    return "[" + "█" * fill + "░" * (width - fill) + f"] {pct:3d}%"
+
+
+def normalize_git_line(line: str) -> str:
+    line = line.strip().replace("\r", "")
+    if not line:
+        return ""
+    for src, dst in [
+        ("Cloning into", "克隆到"), ("Enumerating objects", "枚举对象"),
+        ("Counting objects", "统计对象"), ("Compressing objects", "压缩对象"),
+        ("Receiving objects", "接收对象"), ("Resolving deltas", "解析增量"),
+        ("Updating files", "更新文件"), ("remote:", "远端:"),
+    ]:
+        line = line.replace(src, dst)
+    return line
+
+
+def _extract_pct(line: str) -> int | None:
+    m = re.search(r"(\d{1,3})%", line)
+    if not m:
+        return None
+    try:
+        v = int(m.group(1))
+    except ValueError:
+        return None
+    return v if 0 <= v <= 100 else None
+
+
 def _download_repo_zip(url: str, dest_dir: Path) -> Path:
-    """Download a GitHub repo as zip and extract it."""
-    # Convert github.com URL to zip download URL
-    # e.g. https://github.com/owner/repo -> https://github.com/owner/repo/archive/refs/heads/main.zip
+    """Download a GitHub repo as zip with streaming progress and cancel support."""
     zip_url = url.rstrip("/")
     if zip_url.endswith(".git"):
         zip_url = zip_url[:-4]
 
-    # Try main branch first, then master
-    for branch in ["main", "master"]:
+    for branch in ("main", "master"):
+        raise_if_cancelled()
         try:
             full_url = f"{zip_url}/archive/refs/heads/{branch}.zip"
-            logger.info("Trying zip download: %s", full_url)
-            response = httpx.get(full_url, follow_redirects=True, timeout=120)
-            if response.status_code == 200:
-                zip_path = dest_dir.parent / (dest_dir.name + ".zip")
-                zip_path.parent.mkdir(parents=True, exist_ok=True)
-                zip_path.write_bytes(response.content)
+            emit_progress("Evaluate repo", "正在下载仓库 ZIP", detail=f"URL：{full_url}")
+            zip_path = dest_dir.parent / (dest_dir.name + ".zip")
+            zip_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Extract
-                with zipfile.ZipFile(zip_path) as zf:
-                    zf.extractall(dest_dir.parent)
+            with httpx.stream("GET", full_url, follow_redirects=True, timeout=120) as resp:
+                if resp.status_code != 200:
+                    continue
+                total = int(resp.headers.get("content-length", "0") or 0)
+                downloaded = 0
+                last_pct = -1
+                with open(zip_path, "wb") as f:
+                    for chunk in resp.iter_bytes():
+                        raise_if_cancelled()
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            pct = int(downloaded * 100 / total)
+                            if pct != last_pct:
+                                last_pct = pct
+                                bar = make_progress_bar(pct)
+                                emit_progress("Evaluate repo", "正在下载仓库 ZIP",
+                                              detail=None,
+                                              progress_kind="zip_download",
+                                              progress_percent=pct,
+                                              progress_bar=bar,
+                                              progress_text=f"已下载 {downloaded / 1024 / 1024:.1f} MiB")
 
-                # GitHub zip extracts into owner-repo-branch/ dir, move contents up
-                extracted = dest_dir.parent / f"{dest_dir.name}-{branch}"
-                if not extracted.exists():
-                    # Try finding the extracted dir by listing
-                    for item in dest_dir.parent.iterdir():
-                        if item.is_dir() and item.name != dest_dir.name:
-                            extracted = item
-                            break
+            emit_progress("Evaluate repo", "仓库 ZIP 下载完成，正在解压")
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(dest_dir.parent)
 
-                if extracted.exists():
-                    extracted.rename(dest_dir)
+            extracted = dest_dir.parent / f"{dest_dir.name}-{branch}"
+            if not extracted.exists():
+                for item in dest_dir.parent.iterdir():
+                    if item.is_dir() and item.name != dest_dir.name:
+                        extracted = item
+                        break
+            if extracted.exists():
+                extracted.rename(dest_dir)
 
+            zip_path.unlink(missing_ok=True)
+            emit_progress("Evaluate repo", "仓库解压完成", detail=f"目标目录：{dest_dir}")
+            return dest_dir
+
+        except PipelineCancelled:
+            if zip_path.exists():
                 zip_path.unlink(missing_ok=True)
-                logger.info("zip download and extraction successful")
-                return dest_dir
+            _cleanup_clone(dest_dir)
+            raise
         except Exception as e:
             logger.warning("zip download for branch %s failed: %s", branch, e)
             continue

@@ -43,64 +43,65 @@ def classify_smoke_failure(stderr: str, stdout: str) -> tuple:
 
     Returns (failure_type, evidence_line).
     """
-    text = (stderr + "\n" + stdout).lower()
+    combined = stderr + "\n" + stdout
+    text = combined.lower()
 
+    # 1. Module import errors
     if "modulenotfounderror" in text or "no module named" in text:
-        match_lines = [l for l in (stderr + stdout).splitlines()
+        match_lines = [l for l in combined.splitlines()
                        if "modulenotfounderror" in l.lower() or "no module named" in l.lower()]
         evidence = match_lines[0].strip() if match_lines else None
         return "missing_dependency", evidence
 
-    if "checkpoint" in text or ".pth" in text or ".ckpt" in text or ".pt" in text:
-        match_lines = [l for l in (stderr + stdout).splitlines()
-                       if any(k in l.lower() for k in ["checkpoint", ".pth", ".ckpt", ".pt"])]
+    # 2. CUDA errors — MUST come before checkpoint check
+    cuda_markers = [
+        "torch not compiled with cuda enabled",
+        "cuda is not available",
+        "cuda unavailable",
+        "no cuda gpus are available",
+        "no nvidia driver",
+        "nvidia driver",
+        "cuda driver",
+        "cuda runtime",
+        "cudnn",
+        "gpu is not available",
+        "no gpu",
+        "cuda error",
+        "cuda out of memory",
+        "assertionerror: torch not compiled",
+    ]
+    if any(marker in text for marker in cuda_markers):
+        match_lines = [l for l in combined.splitlines()
+                       if any(marker in l.lower() for marker in cuda_markers)]
         evidence = match_lines[0].strip() if match_lines else None
-        return "missing_checkpoint", evidence
+        return "cuda_unavailable", evidence
 
+    # 3. Checkpoint missing — only with negative indicators
+    ckpt_ok, ckpt_evidence = _looks_like_missing_checkpoint(stderr, stdout)
+    if ckpt_ok:
+        return "missing_checkpoint", ckpt_evidence
+
+    # 4. File not found (non-checkpoint)
     if "filenotfounderror" in text:
-        match_lines = [l for l in (stderr + stdout).splitlines()
+        match_lines = [l for l in combined.splitlines()
                        if "filenotfounderror" in l.lower()]
         evidence = match_lines[0].strip() if match_lines else None
         return "file_not_found", evidence
 
-    if (
-        "cannot allocate memory in static tls block" in text
-        or ("importerror:" in text and (".so" in text or "libgomp" in text))
-    ):
-        match_lines = [l for l in (stderr + stdout).splitlines()
+    if ("cannot allocate memory in static tls block" in text
+            or ("importerror:" in text and (".so" in text or "libgomp" in text))):
+        match_lines = [l for l in combined.splitlines()
                        if "importerror:" in l.lower() or "static tls" in l.lower() or "libgomp" in l.lower()]
         evidence = match_lines[0].strip() if match_lines else None
         return "runtime_linker_error", evidence
 
-    camera_markers = [
-        "could not read camera",
-        "can't open camera",
-        "cannot open camera",
-        "camera index out of range",
-        "webcam",
-        "videoio",
-    ]
+    camera_markers = ["could not read camera", "can't open camera", "cannot open camera",
+                      "camera index out of range", "webcam", "videoio"]
     if any(marker in text for marker in camera_markers):
-        match_lines = [
-            l for l in (stderr + stdout).splitlines()
-            if any(marker in l.lower() for marker in camera_markers)
-        ]
+        match_lines = [l for l in combined.splitlines()
+                       if any(marker in l.lower() for marker in camera_markers)]
         evidence = match_lines[0].strip() if match_lines else None
         return "missing_input_device", evidence
-
-    cuda_markers = [
-        "cuda",
-        "cudnn",
-        "nvidia-smi",
-        "nvidia driver",
-        "no gpu",
-        "gpu is not available",
-    ]
-    if any(marker in text for marker in cuda_markers):
-        match_lines = [l for l in (stderr + stdout).splitlines()
-                       if any(marker in l.lower() for marker in cuda_markers)]
-        evidence = match_lines[0].strip() if match_lines else None
-        return "cuda_error", evidence
 
     if "no such file" in text:
         return "file_not_found", None
@@ -112,12 +113,43 @@ def classify_smoke_failure(stderr: str, stdout: str) -> tuple:
         return "timeout", None
 
     if "usage:" in text and "error:" in text:
-        match_lines = [l for l in (stderr + stdout).splitlines()
-                       if "error:" in l.lower()]
+        match_lines = [l for l in combined.splitlines() if "error:" in l.lower()]
         evidence = match_lines[0].strip() if match_lines else None
         return "argument_error", evidence
 
     return "unknown", None
+
+
+def _looks_like_missing_checkpoint(stderr: str, stdout: str) -> tuple[bool, str | None]:
+    """Only return True when a negative indicator AND a checkpoint marker are present."""
+    combined = stderr + "\n" + stdout
+    text = combined.lower()
+
+    checkpoint_markers = ["checkpoint", ".pth", ".ckpt", ".pt", "pretrained", "weights"]
+
+    negative_markers = [
+        "no such file",
+        "filenotfounderror",
+        "file not found",
+        "not found",
+        "missing",
+        "cannot find",
+        "could not find",
+        "failed to download",
+        "http error",
+        "connectionerror",
+        "download failed",
+    ]
+
+    if not any(c in text for c in checkpoint_markers):
+        return False, None
+    if not any(n in text for n in negative_markers):
+        return False, None
+
+    lines = [l for l in combined.splitlines()
+             if any(c in l.lower() for c in checkpoint_markers)
+             or any(n in l.lower() for n in negative_markers)]
+    return True, lines[0].strip() if lines else None
 
 
 class SmokeRunAgent:
@@ -453,7 +485,8 @@ runpy.run_path(str(script), run_name="__main__")
             return state.env_build.python_executable
         if not state.env_build.environment_path:
             return None
-        return str(Path(state.env_build.environment_path) / "bin" / "python")
+        import sys as _sys
+        return str(Path(state.env_build.environment_path) / ("python.exe" if _sys.platform == "win32" else "bin/python"))
 
     def _venv_pip_target_args(self, state: TaskState) -> list[str]:
         if not state.env_build or not state.env_build.python_paths:
