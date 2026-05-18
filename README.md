@@ -1,4 +1,4 @@
-# Paper Reproduction Smoke Agent
+# Paper Replication Agent
 
 Automated pipeline that takes an academic paper (PDF), locates the corresponding code repository, builds the environment, runs a smoke test, plans and executes task-family–aware benchmark reproduction, attempts a lightweight end-to-end reproduction when safe, and produces a reproducibility report.
 
